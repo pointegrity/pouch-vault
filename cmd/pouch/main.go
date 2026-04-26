@@ -28,7 +28,7 @@ import (
 
 // Version is the cli's reported version (and matches the daemon's
 // version stamp in this repo, since they release together).
-const Version = "0.3.0"
+const Version = "0.3.1"
 
 func main() {
 	if len(os.Args) < 2 {

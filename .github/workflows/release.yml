@@ -70,7 +70,9 @@ jobs:
       - name: Flatten
         run: |
           mkdir -p flat
-          find dist -type f -name 'pouch-anchor-*' -exec mv {} flat/ \;
+          # `pouch-*` matches both `pouch-anchor-...` (daemon) and
+          # `pouch-...` (CLI), so one glob covers both binaries.
+          find dist -type f -name 'pouch-*' -exec mv {} flat/ \;
           ls -la flat
 
       - uses: softprops/action-gh-release@v2
