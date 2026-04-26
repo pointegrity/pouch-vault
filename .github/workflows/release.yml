@@ -1,0 +1,70 @@
+name: release
+
+# On every `vX.Y.Z` tag: cross-compile binaries for the five common
+# OS/arch combos and attach them to the GitHub Release of the same
+# tag. modernc/sqlite is pure Go, so CGO=0 + GOOS/GOARCH is enough —
+# no toolchain juggling.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64, suffix: '' }
+          - { goos: linux,   goarch: arm64, suffix: '' }
+          - { goos: darwin,  goarch: amd64, suffix: '' }
+          - { goos: darwin,  goarch: arm64, suffix: '' }
+          - { goos: windows, goarch: amd64, suffix: '.exe' }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist
+          out="dist/pouch-anchor-${GOOS}-${GOARCH}${{ matrix.suffix }}"
+          go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME#v}" -o "$out" .
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pouch-anchor-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten
+        run: |
+          mkdir -p flat
+          find dist -type f -name 'pouch-anchor-*' -exec mv {} flat/ \;
+          ls -la flat
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: flat/*
+          generate_release_notes: true

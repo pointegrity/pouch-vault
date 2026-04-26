@@ -1,0 +1,35 @@
+# /etc/systemd/system/pouch-anchor.service
+#
+# Example unit. Edit User, paths, and EnvironmentFile before installing.
+#
+#   sudo install -d -m 700 -o pouch /etc/pouch
+#   sudo install -m 600 -o pouch examples/pouch-anchor.env /etc/pouch/anchor.env
+#   sudo install -d -m 755 -o pouch /var/lib/pouch-anchor
+#   sudo cp build/pouch-anchor /usr/local/bin/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pouch-anchor
+
+[Unit]
+Description=pouch-anchor — local relay daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pouch
+Group=pouch
+EnvironmentFile=/etc/pouch/anchor.env
+WorkingDirectory=/var/lib/pouch-anchor
+ExecStart=/usr/local/bin/pouch-anchor
+Restart=on-failure
+RestartSec=5
+
+# Hardening — anchor only needs its data dir.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/pouch-anchor
+
+[Install]
+WantedBy=multi-user.target

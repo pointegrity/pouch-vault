@@ -1,0 +1,16 @@
+# Build output
+/build/
+/pouch-anchor
+/pouch-anchor.exe
+*.test
+
+# Local data
+*.db
+*.db-shm
+*.db-wal
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS launchd unit for pouch-anchor.
+
+  Install (user-level — runs while you're logged in):
+    cp examples/com.pointegrity.pouch-anchor.plist ~/Library/LaunchAgents/
+    # edit the EnvironmentVariables block below first
+    launchctl load ~/Library/LaunchAgents/com.pointegrity.pouch-anchor.plist
+
+  Or system-level (runs at boot, needs sudo):
+    sudo cp examples/com.pointegrity.pouch-anchor.plist /Library/LaunchDaemons/
+    sudo chown root:wheel /Library/LaunchDaemons/com.pointegrity.pouch-anchor.plist
+    sudo launchctl load /Library/LaunchDaemons/com.pointegrity.pouch-anchor.plist
+
+  Logs go to /tmp/pouch-anchor.{out,err}.log — change the paths
+  below if you want them under ~/Library/Logs.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pointegrity.pouch-anchor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/pouch-anchor</string>
+    </array>
+
+    <!-- Replace these values with what `pouch anchor create` printed. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>POUCH_URL</key>
+        <string>https://pouch.pointegrity.com</string>
+        <key>POUCH_ANCHOR_KEY</key>
+        <string>pk_REPLACE_ME</string>
+        <key>POUCH_HMAC_SECRET</key>
+        <string>REPLACE_ME</string>
+        <key>POUCH_PUBLIC_URL</key>
+        <string>https://anchor.example/hook</string>
+        <key>ANCHOR_DB</key>
+        <string>/Users/Shared/pouch-anchor/drops.db</string>
+        <key>ANCHOR_LISTEN</key>
+        <string>127.0.0.1:7780</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/pouch-anchor.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/pouch-anchor.err.log</string>
+</dict>
+</plist>
