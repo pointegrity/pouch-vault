@@ -38,7 +38,7 @@ import (
 
 // Version is stamped into heartbeats so the SaaS replication-status
 // panel can flag stale anchor builds. Bump on release.
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 type config struct {
 	pouchURL    string
@@ -259,6 +259,17 @@ func run() error {
 	}
 	log.Printf("registered as %s (name=%s, mode=%s)", anchorID, cfg.name, mode)
 
+	// Initialize the shared status singleton — used by the local UI
+	// + the daemon's introspection.
+	status.AnchorName = cfg.name
+	status.AnchorID = anchorID
+	status.Version = Version
+	status.Mode = mode
+	status.Hostname = hostnameOr("anchor")
+	status.PouchURL = cfg.pouchURL
+	status.DBPath = cfg.dbPath
+	status.StartedAt = time.Now().UTC()
+
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -270,14 +281,17 @@ func run() error {
 	go runHeartbeats(ctx, client, store, cfg.heartbeat)
 
 	if mode == "pull" {
-		// No inbound listener needed. Just hold the SSE connection
-		// open. /healthz still useful for local health checks if
-		// ANCHOR_LISTEN is set; we open it conditionally.
+		// Pull mode: no inbound /hook needed. Still useful to serve
+		// /healthz + the local UI on ANCHOR_LISTEN. Skip if the user
+		// explicitly set ANCHOR_LISTEN=off.
 		if cfg.listenAddr != "" && cfg.listenAddr != "off" {
-			go runHealthListener(ctx, cfg.listenAddr)
+			go runLocalListener(ctx, cfg.listenAddr, store, nil)
 		}
 		log.Printf("pouch-anchor %s pull-mode, db=%s, pouch=%s",
 			Version, cfg.dbPath, cfg.pouchURL)
+		if cfg.listenAddr != "off" {
+			log.Printf("local UI: http://%s/ui", normalizeListenForURL(cfg.listenAddr))
+		}
 		runStream(ctx, client, store, cfg.hmacSecret)
 		log.Printf("pouch-anchor: stopped")
 		return nil
@@ -285,13 +299,16 @@ func run() error {
 
 	// Push mode: pouch POSTs /hook deliveries to us. Same shape as
 	// the regular webhook receiver (HMAC verify + dedup + insert).
+	// We still mount the local UI on the same listener.
 	receiver := NewReceiver(store, cfg.hmacSecret)
 	mux := http.NewServeMux()
 	mux.Handle("POST /hook", receiver.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
+	mountLocalUI(mux, store)
 	srv := &http.Server{Addr: cfg.listenAddr, Handler: mux}
+	log.Printf("local UI: http://%s/ui", normalizeListenForURL(cfg.listenAddr))
 
 	go func() {
 		<-ctx.Done()
@@ -309,15 +326,17 @@ func run() error {
 	return nil
 }
 
-// runHealthListener serves a tiny /healthz on addr. Used in pull
-// mode as the "is the daemon up?" probe — `curl localhost:7780/healthz`
-// is convenient for systemd / launchd / docker healthchecks even
-// when the binary doesn't otherwise need an HTTP server.
-func runHealthListener(ctx context.Context, addr string) {
+// runLocalListener serves the local-UI surface (status, recent
+// drops, viewer HTML) plus /healthz on addr. Used in pull mode where
+// there's no /hook. The mux comes pre-wired by mountLocalUI; the
+// extra arg is for future use (push-mode receivers, anchor-only
+// admin endpoints, etc).
+func runLocalListener(ctx context.Context, addr string, st *Store, _ any) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
+	mountLocalUI(mux, st)
 	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
 		<-ctx.Done()
@@ -326,8 +345,18 @@ func runHealthListener(ctx context.Context, addr string) {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Printf("healthz listener: %v", err)
+		log.Printf("local listener: %v", err)
 	}
+}
+
+// normalizeListenForURL turns a listen address into a host:port that
+// works in a browser URL. ":7780" -> "localhost:7780"; "127.0.0.1:7780"
+// stays as-is.
+func normalizeListenForURL(addr string) string {
+	if len(addr) > 0 && addr[0] == ':' {
+		return "localhost" + addr
+	}
+	return addr
 }
 
 func hostnameOr(def string) string {

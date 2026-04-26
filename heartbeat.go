@@ -28,8 +28,10 @@ func runHeartbeats(ctx context.Context, client *PouchClient, store *Store, inter
 		defer cancel()
 		if err := client.Heartbeat(hbCtx, lastID, count); err != nil {
 			log.Printf("heartbeat: %v", err)
+			status.MarkHeartbeatError(err.Error())
 			return
 		}
+		status.MarkHeartbeat()
 	}
 
 	tick() // immediate first beat

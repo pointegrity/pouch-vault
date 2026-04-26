@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pouch-anchor — local viewer</title>
+  <style>
+    :root {
+      --bg: #f7f7f5;
+      --card: #fff;
+      --text: #222;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --accent: #4f7c40;
+      --good: #166534;
+      --good-bg: #dcfce7;
+      --warn: #92400e;
+      --warn-bg: #fef3c7;
+      --bad: #991b1b;
+      --bad-bg: #fee2e2;
+      --code: #f3f4f6;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      font-size: 14px;
+    }
+    .wrap { max-width: 64rem; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
+    header { display: flex; align-items: center; gap: 1rem; padding: 0.5rem 0 1.5rem; }
+    header h1 { font-size: 1.25rem; margin: 0; font-weight: 600; }
+    header .subtitle { color: var(--muted); font-size: 0.85rem; }
+    .badge {
+      font-size: 0.7rem; padding: 0.15rem 0.55rem; border-radius: 999px;
+      font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .badge.live  { background: var(--good-bg); color: var(--good); }
+    .badge.stale { background: var(--warn-bg); color: var(--warn); }
+    .badge.cold  { background: var(--bad-bg);  color: var(--bad); }
+    .badge.unknown { background: #e5e7eb; color: #6b7280; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+             gap: 0.75rem; margin-bottom: 1.5rem; }
+    .stat {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.65rem 0.85rem;
+    }
+    .stat .k { color: var(--muted); font-size: 0.75rem; text-transform: uppercase;
+               letter-spacing: 0.04em; margin-bottom: 0.2rem; }
+    .stat .v { font-size: 0.95rem; font-weight: 500; }
+    .stat .v.code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.8rem; }
+    .toolbar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .toolbar input[type="search"] {
+      flex: 1; padding: 0.4rem 0.6rem; border: 1px solid var(--border);
+      border-radius: 4px; font: inherit; background: var(--card);
+    }
+    .toolbar .count { color: var(--muted); font-size: 0.85rem; }
+    table { width: 100%; border-collapse: collapse; background: var(--card);
+            border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border);
+             font-size: 0.85rem; vertical-align: top; }
+    th { background: #fafaf9; font-weight: 600; color: var(--muted);
+         text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.04em; }
+    tr:last-child td { border-bottom: none; }
+    tr.row { cursor: pointer; }
+    tr.row:hover { background: #fafaf9; }
+    td.id { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem;
+            color: var(--muted); white-space: nowrap; }
+    td.label { font-weight: 500; max-width: 24rem; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
+    td.stream { color: var(--accent); font-size: 0.78rem; }
+    td.time { color: var(--muted); font-size: 0.78rem; white-space: nowrap; }
+    .empty { padding: 2.5rem 1rem; text-align: center; color: var(--muted); }
+
+    /* Drop detail panel — slides in below the row when expanded. */
+    .detail { background: var(--code); padding: 0.85rem 1rem; }
+    .detail .meta { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem;
+                    color: var(--muted); font-size: 0.78rem; margin-bottom: 0.65rem; }
+    .detail .meta b { color: var(--text); margin-right: 0.25rem; font-weight: 500; }
+    .detail pre { background: #1a1a1a; color: #f3f4f6; padding: 0.85rem 1rem;
+                  border-radius: 4px; overflow-x: auto; font-size: 0.8rem;
+                  line-height: 1.45; margin: 0; max-height: 24rem; overflow-y: auto; }
+
+    footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border);
+             color: var(--muted); font-size: 0.8rem; }
+    footer a { color: var(--accent); }
+    .pi-link { display: inline-flex; align-items: center; gap: 0.4rem; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1 id="anchor-name">pouch-anchor</h1>
+    <span id="status-badge" class="badge unknown">…</span>
+    <span class="subtitle" id="anchor-mode"></span>
+  </header>
+
+  <section class="stats" id="stats"></section>
+
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="search label / body" autocomplete="off" autocorrect="off" autocapitalize="off">
+    <span class="count" id="count">—</span>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Time</th><th>Stream</th><th>Label</th><th>ID</th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <footer>
+    <p>
+      Read-only viewer of your local pouch-anchor archive. Anything mutating
+      (delete, share, change settings, manage subscription) is in
+      <a id="pouch-link" href="https://pouch.pointegrity.com/" target="_blank" rel="noopener">your pouch</a>
+      where you're already logged in.
+    </p>
+    <p>
+      Local DB: <code id="db-path">…</code> · Anchor: <code id="anchor-id">…</code>
+    </p>
+  </footer>
+
+</div>
+
+<script>
+const fmtRel = (iso) => {
+  if (!iso) return 'never';
+  const ms = Date.now() - new Date(iso);
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms/1000))}s ago`;
+  if (ms < 3_600_000) return `${Math.round(ms/60_000)}m ago`;
+  if (ms < 86_400_000) return `${Math.round(ms/3_600_000)}h ago`;
+  return `${Math.round(ms/86_400_000)}d ago`;
+};
+const fmtAbs = (iso) => {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString();
+};
+
+async function loadStatus() {
+  const r = await fetch('/api/local/status');
+  if (!r.ok) return;
+  const s = await r.json();
+
+  document.getElementById('anchor-name').textContent = s.anchor_name || 'pouch-anchor';
+  document.getElementById('anchor-id').textContent = s.anchor_id || '(unregistered)';
+  document.getElementById('db-path').textContent = s.db_path || '';
+  document.getElementById('anchor-mode').textContent =
+    `${s.mode}-mode · v${s.version} · host ${s.hostname}`;
+  if (s.pouch_url) document.getElementById('pouch-link').href = s.pouch_url;
+
+  // Health badge — based on heartbeat age (not stream state, since
+  // push-mode anchors have no stream and pull-mode reconnect gaps
+  // are normal).
+  const badge = document.getElementById('status-badge');
+  if (!s.last_heartbeat_at) {
+    badge.className = 'badge cold'; badge.textContent = 'cold';
+  } else {
+    const age = (Date.now() - new Date(s.last_heartbeat_at)) / 1000;
+    if (age < 90)       { badge.className = 'badge live';  badge.textContent = 'live';  }
+    else if (age < 600) { badge.className = 'badge stale'; badge.textContent = 'stale'; }
+    else                { badge.className = 'badge cold';  badge.textContent = 'cold';  }
+  }
+
+  // Stat cards.
+  const stats = [
+    { k: 'Total drops',      v: s.total_drops != null ? s.total_drops.toLocaleString() : '—' },
+    { k: 'Last drop',        v: fmtRel(s.last_drop_received_at), code: s.last_drop_id },
+    { k: 'Last heartbeat',   v: fmtRel(s.last_heartbeat_at) },
+    { k: 'Stream',           v: s.mode === 'pull'
+        ? (s.stream_connected ? 'connected' : 'reconnecting')
+        : 'push-mode' },
+  ];
+  const stEl = document.getElementById('stats');
+  stEl.innerHTML = '';
+  for (const st of stats) {
+    const div = document.createElement('div');
+    div.className = 'stat';
+    div.innerHTML = `<div class="k">${st.k}</div><div class="v">${st.v}</div>`;
+    if (st.code) {
+      const c = document.createElement('div');
+      c.className = 'v code'; c.textContent = st.code;
+      div.appendChild(c);
+    }
+    stEl.appendChild(div);
+  }
+}
+
+let rowsCache = [];
+let expandedRow = null;
+
+async function loadDrops(q) {
+  const url = '/api/local/drops' + (q ? '?q=' + encodeURIComponent(q) : '');
+  const r = await fetch(url);
+  if (!r.ok) return;
+  const d = await r.json();
+  rowsCache = d.drops || [];
+  renderRows();
+}
+
+function renderRows() {
+  const tbody = document.getElementById('rows');
+  tbody.innerHTML = '';
+  document.getElementById('count').textContent =
+    rowsCache.length + (rowsCache.length === 1 ? ' drop' : ' drops');
+
+  if (rowsCache.length === 0) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="4" class="empty">No drops yet — once your pouch sends one, it'll appear here.</td>`;
+    tbody.appendChild(tr);
+    return;
+  }
+  for (const d of rowsCache) {
+    const tr = document.createElement('tr');
+    tr.className = 'row';
+    tr.innerHTML = `
+      <td class="time" title="${fmtAbs(d.ReceivedAt)}">${fmtRel(d.ReceivedAt)}</td>
+      <td class="stream">${escapeHTML(d.Stream || '—')}</td>
+      <td class="label">${escapeHTML(d.Label || '(no label)')}</td>
+      <td class="id">${escapeHTML(d.DropID || '')}</td>`;
+    tr.addEventListener('click', () => toggleDetail(tr, d));
+    tbody.appendChild(tr);
+  }
+}
+
+function toggleDetail(tr, d) {
+  if (expandedRow && expandedRow.parentNode) expandedRow.remove();
+  if (expandedRow && expandedRow.dataset.for === d.DropID) {
+    expandedRow = null;
+    return;
+  }
+  const row = document.createElement('tr');
+  row.dataset.for = d.DropID;
+  const td = document.createElement('td');
+  td.colSpan = 4;
+  td.className = 'detail';
+  const tagsHTML = (d.Tags && d.Tags.length)
+    ? d.Tags.map(t => `<b>tag:</b>${escapeHTML(t)}`).join(' ') : '';
+  td.innerHTML = `
+    <div class="meta">
+      <span><b>created:</b>${fmtAbs(d.CreatedAt)}</span>
+      <span><b>received:</b>${fmtAbs(d.ReceivedAt)}</span>
+      <span><b>source:</b>${escapeHTML(d.Source || '—')}</span>
+      ${d.MIME ? `<span><b>mime:</b>${escapeHTML(d.MIME)}</span>` : ''}
+      ${tagsHTML}
+    </div>
+    <pre>${escapeHTML(d.Body || '')}</pre>`;
+  row.appendChild(td);
+  tr.parentNode.insertBefore(row, tr.nextSibling);
+  expandedRow = row;
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+
+document.getElementById('search').addEventListener('input', (e) => {
+  const q = e.target.value.trim();
+  // Debounce: 200ms.
+  clearTimeout(window._searchT);
+  window._searchT = setTimeout(() => loadDrops(q), 200);
+});
+
+loadStatus(); loadDrops('');
+setInterval(loadStatus, 5000);
+</script>
+</body>
+</html>

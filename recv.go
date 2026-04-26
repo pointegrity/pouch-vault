@@ -95,6 +95,7 @@ func (r *Receiver) Handler() http.HandlerFunc {
 			http.Error(w, "store error", 500)
 			return
 		}
+		status.MarkDropReceived(drop.DropID)
 		w.WriteHeader(200)
 	}
 }

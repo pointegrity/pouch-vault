@@ -49,6 +49,11 @@ a Mac mini at home, fill in three values, you're done.
 - **Reconnect-replay** — drops that pouch tried to deliver while the
   anchor was offline are queued; on reconnect, pouch re-fires them
   immediately so the archive catches up.
+- **Local viewer** at `http://localhost:7780/ui` — a tiny read-only
+  HTML page showing status, recent drops, search, and inline body
+  viewing. No login on the local UI (it's localhost-only). Anything
+  mutating — delete, share, manage account — is in your pouch SaaS
+  where you're already logged in.
 
 ## Push mode (advanced)
 

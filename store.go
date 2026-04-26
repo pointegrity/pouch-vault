@@ -95,6 +95,94 @@ func (s *Store) Insert(ctx context.Context, d *Drop) error {
 	return err
 }
 
+// List returns up to `limit` drops, newest first. If `search` is
+// non-empty, filters with a LIKE over label and body. Used by the
+// local UI; not by the daemon's main path.
+func (s *Store) List(ctx context.Context, search string, limit int) ([]Drop, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	var (
+		rows interface {
+			Next() bool
+			Scan(...any) error
+			Err() error
+			Close() error
+		}
+		err error
+	)
+	if search == "" {
+		r, e := s.db.QueryContext(ctx, `
+			SELECT delivery_id, drop_id, pouch_user, stream, label, body, tags,
+			       mime, source, created_at, received_at
+			FROM drops
+			ORDER BY received_at DESC
+			LIMIT ?
+		`, limit)
+		rows, err = r, e
+	} else {
+		like := "%" + search + "%"
+		r, e := s.db.QueryContext(ctx, `
+			SELECT delivery_id, drop_id, pouch_user, stream, label, body, tags,
+			       mime, source, created_at, received_at
+			FROM drops
+			WHERE label LIKE ? OR body LIKE ?
+			ORDER BY received_at DESC
+			LIMIT ?
+		`, like, like, limit)
+		rows, err = r, e
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Drop{}
+	for rows.Next() {
+		var d Drop
+		var tagsStr string
+		if err := rows.Scan(&d.DeliveryID, &d.DropID, &d.PouchUser, &d.Stream,
+			&d.Label, &d.Body, &tagsStr, &d.MIME, &d.Source,
+			&d.CreatedAt, &d.ReceivedAt); err != nil {
+			return nil, err
+		}
+		if tagsStr != "" && tagsStr != "[]" {
+			_ = json.Unmarshal([]byte(tagsStr), &d.Tags)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// Get returns one drop by drop_id (the pouch-side itm-... id). The
+// id is unique-enough for our purposes; in the unlikely event of a
+// collision (would require pouch sending the same drop_id twice with
+// different delivery_ids), we return the most recent.
+func (s *Store) Get(ctx context.Context, dropID string) (*Drop, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT delivery_id, drop_id, pouch_user, stream, label, body, tags,
+		       mime, source, created_at, received_at
+		FROM drops
+		WHERE drop_id = ?
+		ORDER BY received_at DESC
+		LIMIT 1
+	`, dropID)
+	var d Drop
+	var tagsStr string
+	err := row.Scan(&d.DeliveryID, &d.DropID, &d.PouchUser, &d.Stream,
+		&d.Label, &d.Body, &tagsStr, &d.MIME, &d.Source,
+		&d.CreatedAt, &d.ReceivedAt)
+	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if tagsStr != "" && tagsStr != "[]" {
+		_ = json.Unmarshal([]byte(tagsStr), &d.Tags)
+	}
+	return &d, nil
+}
+
 // Stats returns total row count + the most recent drop id for the
 // heartbeat report. Cheap — `count(*)` over a small table is fast,
 // and the index makes the order-by trivial.

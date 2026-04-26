@@ -81,6 +81,8 @@ func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecr
 		return fmt.Errorf("stream %d: %s", resp.StatusCode, strings.TrimSpace(string(buf)))
 	}
 	log.Printf("stream: connected to %s/api/anchor/stream", client.BaseURL)
+	status.MarkConnected()
+	defer status.MarkDisconnected("loop ended")
 
 	parser := newSSEParser(resp.Body)
 	for {
@@ -146,7 +148,11 @@ func handleStreamDrop(ctx context.Context, store *Store, hmacSecret string, ev *
 		CreatedAt:  p.Drop.CreatedAt,
 		ReceivedAt: time.Now().UTC(),
 	}
-	return store.Insert(ctx, drop)
+	if err := store.Insert(ctx, drop); err != nil {
+		return err
+	}
+	status.MarkDropReceived(drop.DropID)
+	return nil
 }
 
 // --- minimal SSE parser ------------------------------------------------
