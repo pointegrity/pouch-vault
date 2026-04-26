@@ -321,7 +321,7 @@ POUCH_KEY=pk_...
 ### Use it
 
 ```bash
-# Pipe stdin
+# Pipe stdin (write — uses POUCH_KEY)
 echo "quick note" | pouch put --label "review"
 git diff | pouch put --label "WIP diff" --tag wip
 
@@ -339,6 +339,15 @@ echo ephemeral | pouch put --ttl 1h
 
 # Bare invocation acts as `pouch put` if stdin is piped
 cat ~/.bash_history | tail -100 | pouch
+
+# Read access (uses login token, not the ingress key)
+pouch login --user you           # prompts for password, saves token
+pouch ls                         # newest 25
+pouch ls --stream kept --tag work --limit 50
+pouch ls --query "release notes" --json | jq .
+pouch get itm-...                # body to stdout
+pouch get itm-... -o note.md     # body to file
+pouch get itm-... --json         # whole record
 ```
 
 Output is the new drop's `itm-...` id — pipe-friendly:

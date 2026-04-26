@@ -28,7 +28,7 @@ import (
 
 // Version is the cli's reported version (and matches the daemon's
 // version stamp in this repo, since they release together).
-const Version = "0.3.1"
+const Version = "0.4.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -47,6 +47,18 @@ func main() {
 	case "put":
 		if err := runPut(os.Args[2:]); err != nil {
 			fail("put", err)
+		}
+	case "get":
+		if err := runGet(os.Args[2:]); err != nil {
+			fail("get", err)
+		}
+	case "ls", "list":
+		if err := runLs(os.Args[2:]); err != nil {
+			fail("ls", err)
+		}
+	case "login":
+		if err := runLogin(os.Args[2:]); err != nil {
+			fail("login", err)
 		}
 	case "init":
 		if err := runInit(os.Args[2:]); err != nil {
@@ -71,19 +83,24 @@ func fail(cmd string, err error) {
 func printHelp() {
 	fmt.Fprint(os.Stderr, "pouch — client for pouch (https://pouch.pointegrity.com).\n\n"+
 		"Usage:\n"+
-		"  pouch put [FILE|-]        send a drop. Body comes from FILE, stdin (- or\n"+
-		"                            piped), or --clipboard. See 'pouch put --help'.\n"+
+		"  pouch put [FILE|-]        send a drop. FILE / stdin (piped or -) /\n"+
+		"                            --clipboard. Auth: ingress key (POUCH_KEY).\n"+
+		"  pouch get ID              fetch a drop's body. Auth: login token.\n"+
+		"  pouch ls [filters]        list drops. Auth: login token.\n"+
+		"  pouch login               log in for read access (saves a JWT).\n"+
 		"  pouch init                scaffold the OS-conventional config dir.\n"+
 		"  pouch version             print version.\n"+
 		"  pouch help                this help.\n\n"+
+		"Two auth modes:\n"+
+		"  - WRITE  (`put`): ingress key in POUCH_KEY. Get one from your admin\n"+
+		"                    via `pouch key create` on the server. Pipe-friendly.\n"+
+		"  - READ   (`get`/`ls`): login token from `pouch login --user <you>`,\n"+
+		"                         saved at <config-dir>/token.\n\n"+
 		"Config: ~/.config/pouch/config.env (Linux), ~/Library/Application Support/pouch/\n"+
 		"        (macOS), %AppData%\\pouch\\ (Windows). Override with --config or\n"+
-		"        $POUCH_CONFIG. Required values:\n\n"+
+		"        $POUCH_CONFIG.\n\n"+
 		"  POUCH_URL=https://pouch.pointegrity.com\n"+
-		"  POUCH_KEY=pk_...                # ingress key from your pouch admin\n\n"+
-		"To get an ingress key, ask whoever runs your pouch server to:\n\n"+
-		"  pouch key create --owner <your-user-id> --label <a-name-you-pick>\n\n"+
-		"The plaintext key is shown ONCE — save it to the config above.\n")
+		"  POUCH_KEY=pk_...                # for `pouch put`\n")
 }
 
 func isStdinPiped() bool {
