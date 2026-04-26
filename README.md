@@ -78,6 +78,36 @@ cd pouch-anchor
 go build -o pouch-anchor .
 ```
 
+### One-time scaffold (recommended)
+
+After installing the binary, on each anchor host run:
+
+```bash
+pouch-anchor init
+```
+
+This creates the OS-conventional config + data directories and drops
+a stub config you fill in:
+
+| OS | config file | database |
+|---|---|---|
+| Linux | `~/.config/pouch-anchor/anchor.env` | `~/.local/share/pouch-anchor/drops.db` |
+| macOS | `~/Library/Application Support/pouch-anchor/anchor.env` | (same dir)/drops.db |
+| Windows | `%AppData%\pouch-anchor\anchor.env` | (same dir)\drops.db |
+
+Then edit the config file with the values from `pouch anchor create`
+(see Provisioning above) and run `pouch-anchor` — no env vars needed,
+it picks up the file automatically.
+
+The daemon's config-file lookup chain:
+
+1. `--config <path>` flag, or `$POUCH_ANCHOR_CONFIG`
+2. `<user-config-dir>/pouch-anchor/anchor.env` (the `init`-scaffolded path)
+3. `/etc/pouch/anchor.env` (system-wide, useful for systemd)
+
+File values fill any env var **not already set** — so explicit env
+or CLI flags always win.
+
 ## Run
 
 The binary is a foreground process — handles SIGTERM, logs to stderr,

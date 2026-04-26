@@ -52,27 +52,65 @@ type config struct {
 }
 
 func loadConfig() (*config, error) {
-	c := &config{
-		pouchURL:   os.Getenv("POUCH_URL"),
-		anchorKey:  os.Getenv("POUCH_ANCHOR_KEY"),
-		hmacSecret: os.Getenv("POUCH_HMAC_SECRET"),
-		publicURL:  os.Getenv("POUCH_PUBLIC_URL"),
-		dbPath:     envOr("ANCHOR_DB", "drops.db"),
-		listenAddr: envOr("ANCHOR_LISTEN", ":7780"),
-		name:       os.Getenv("ANCHOR_NAME"),
-		heartbeat:  30 * time.Second,
+	// Resolve --config / $POUCH_ANCHOR_CONFIG first so the file's
+	// values can seed env vars that aren't already set. Then the
+	// per-field reads below pick up either the env (already there)
+	// or the file (loaded into env).
+	cfgFile := os.Getenv("POUCH_ANCHOR_CONFIG")
+	flag.StringVar(&cfgFile, "config", cfgFile, "config file path (env-style KEY=VALUE)")
+	// We need the --config flag to be parsed before we read other
+	// flags / env, but flag.Parse() finalises the whole flag set.
+	// Workaround: reuse Go's flag.CommandLine but call Parse early
+	// by registering everything first.
+
+	c := &config{}
+
+	flag.StringVar(&c.pouchURL, "pouch-url", "", "pouch SaaS base URL")
+	flag.StringVar(&c.anchorKey, "anchor-key", "", "anchor API key (pk_...)")
+	flag.StringVar(&c.hmacSecret, "hmac-secret", "", "HMAC shared secret for webhook delivery")
+	flag.StringVar(&c.publicURL, "public-url", "", "where pouch can reach us, e.g. https://anchor.example/hook")
+	flag.StringVar(&c.dbPath, "db", "", "sqlite database path")
+	flag.StringVar(&c.listenAddr, "addr", "", "listen address")
+	flag.StringVar(&c.name, "name", "", "anchor name (defaults to hostname)")
+	flag.DurationVar(&c.heartbeat, "heartbeat", 30*time.Second, "heartbeat interval")
+	flag.Parse()
+
+	// Now load the config file, with the resolution order:
+	//   1. explicit --config / $POUCH_ANCHOR_CONFIG path
+	//   2. <user-config-dir>/pouch-anchor/anchor.env
+	//   3. /etc/pouch/anchor.env
+	// loadEnvFile is no-op on missing files and never overrides
+	// existing env values, so env and CLI flags always win.
+	candidates := []string{cfgFile}
+	if userCfg, err := configPath(); err == nil {
+		candidates = append(candidates, userCfg)
+	}
+	candidates = append(candidates, "/etc/pouch/anchor.env")
+	for _, p := range candidates {
+		if p == "" {
+			continue
+		}
+		if err := loadEnvFile(p); err != nil {
+			return nil, fmt.Errorf("config file %s: %w", p, err)
+		}
 	}
 
-	// CLI flags override env. Useful for local dev.
-	flag.StringVar(&c.pouchURL, "pouch-url", c.pouchURL, "pouch SaaS base URL")
-	flag.StringVar(&c.anchorKey, "anchor-key", c.anchorKey, "anchor API key (pk_...)")
-	flag.StringVar(&c.hmacSecret, "hmac-secret", c.hmacSecret, "HMAC shared secret for webhook delivery")
-	flag.StringVar(&c.publicURL, "public-url", c.publicURL, "where pouch can reach us, e.g. https://anchor.example/hook")
-	flag.StringVar(&c.dbPath, "db", c.dbPath, "sqlite database path")
-	flag.StringVar(&c.listenAddr, "addr", c.listenAddr, "listen address")
-	flag.StringVar(&c.name, "name", c.name, "anchor name (defaults to hostname)")
-	flag.DurationVar(&c.heartbeat, "heartbeat", c.heartbeat, "heartbeat interval")
-	flag.Parse()
+	// CLI flag wins; else env (now possibly seeded from a file);
+	// else built-in default.
+	pickStr(&c.pouchURL,   "POUCH_URL", "")
+	pickStr(&c.anchorKey,  "POUCH_ANCHOR_KEY", "")
+	pickStr(&c.hmacSecret, "POUCH_HMAC_SECRET", "")
+	pickStr(&c.publicURL,  "POUCH_PUBLIC_URL", "")
+	if c.dbPath == "" {
+		// Use OS-conventional default if neither env nor flag set it.
+		if d, err := defaultDBPath(); err == nil {
+			c.dbPath = envOr("ANCHOR_DB", d)
+		} else {
+			c.dbPath = envOr("ANCHOR_DB", "drops.db")
+		}
+	}
+	pickStr(&c.listenAddr, "ANCHOR_LISTEN", ":7780")
+	pickStr(&c.name,       "ANCHOR_NAME", "")
 
 	if c.name == "" {
 		if h, err := os.Hostname(); err == nil {
@@ -105,10 +143,75 @@ func envOr(k, def string) string {
 	return def
 }
 
+// pickStr fills *dst from environment variable `env` if dst is
+// currently empty (so an explicit --flag wins). Falls back to def.
+func pickStr(dst *string, env, def string) {
+	if *dst != "" {
+		return
+	}
+	if v := os.Getenv(env); v != "" {
+		*dst = v
+		return
+	}
+	*dst = def
+}
+
 func main() {
+	// Subcommands are matched on os.Args[1] before flag parsing so
+	// `pouch-anchor init --force` doesn't try to feed --force to the
+	// daemon's flag set.
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "init":
+			if err := runInit(os.Args[2:]); err != nil {
+				log.Fatalf("pouch-anchor init: %v", err)
+			}
+			return
+		case "version", "--version", "-v":
+			fmt.Printf("pouch-anchor %s\n", Version)
+			return
+		case "help", "--help", "-h":
+			printHelp()
+			return
+		}
+	}
+
 	if err := run(); err != nil {
 		log.Fatalf("pouch-anchor: %v", err)
 	}
+}
+
+func printHelp() {
+	fmt.Fprintln(os.Stderr, `pouch-anchor — local relay daemon for pouch.
+
+Usage:
+  pouch-anchor                   run the daemon (reads config from env / file)
+  pouch-anchor init [--force]    scaffold OS-conventional config + data dirs
+  pouch-anchor version           print version and exit
+  pouch-anchor help              print this help
+
+Environment / flags for the daemon:
+  POUCH_URL          --pouch-url     pouch SaaS base URL (required)
+  POUCH_ANCHOR_KEY   --anchor-key    anchor API key (required)
+  POUCH_HMAC_SECRET  --hmac-secret   delivery signature secret (required)
+  POUCH_PUBLIC_URL   --public-url    where pouch reaches us (required)
+  ANCHOR_DB          --db            sqlite database path
+  ANCHOR_LISTEN      --addr          listen address
+  ANCHOR_NAME        --name          anchor name (defaults to hostname)
+                     --heartbeat     heartbeat interval (default 30s)
+                     --config        explicit config file path
+
+The daemon also reads an env-style config file. Lookup order:
+  1. --config <path> / $POUCH_ANCHOR_CONFIG
+  2. <user-config-dir>/pouch-anchor/anchor.env
+       (Linux: ~/.config; macOS: ~/Library/Application Support; Windows: %AppData%)
+  3. /etc/pouch/anchor.env (system-wide)
+File values fill in any env var that's NOT already set — env / flags always win.
+
+Provisioning:
+  pouch anchor create --owner <U> --name <N>     (admin shell on pouch server)
+  pouch-anchor init                              (here, on the anchor host)
+`)
 }
 
 func run() error {
