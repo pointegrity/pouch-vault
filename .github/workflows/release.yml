@@ -34,7 +34,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build
+      - name: Build pouch-anchor (daemon)
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -43,11 +43,20 @@ jobs:
           mkdir -p dist
           out="dist/pouch-anchor-${GOOS}-${GOARCH}${{ matrix.suffix }}"
           go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME#v}" -o "$out" .
+
+      - name: Build pouch (CLI)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          out="dist/pouch-${GOOS}-${GOARCH}${{ matrix.suffix }}"
+          go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME#v}" -o "$out" ./cmd/pouch
           ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pouch-anchor-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: pouch-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/
 
   release:

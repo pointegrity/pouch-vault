@@ -1,6 +1,22 @@
-# pouch-anchor
+# pouch-anchor (and pouch CLI)
 
-Headless local relay daemon for [pouch](https://pouch.pointegrity.com).
+This repo ships **two** binaries that complement each other:
+
+- `pouch-anchor` — local relay daemon. Receives every drop from your
+  pouch over a single outbound HTTPS connection and mirrors it to a
+  local SQLite archive. (See "What it does" below.)
+- `pouch` — minimal client CLI. Send drops *to* your pouch from a
+  shell: pipe / file / clipboard. Quick example:
+  ```bash
+  echo "first cli drop" | pouch put --label hello
+  pouch put README.md --tag docs
+  pouch put -c                   # from system clipboard
+  ```
+  See [pouch CLI](#pouch-cli-pouch-put) below.
+
+Both binaries are pure-Go, statically linked, no CGO, cross-built on
+GitHub Actions for Linux (amd64/arm64), macOS (Intel/Apple Silicon)
+and Windows.
 
 Connects to your pouch over a single outbound HTTPS link, receives
 every drop as it happens, and persists it to a local SQLite archive.
@@ -265,6 +281,86 @@ pouch anchor create --owner <user-id> --name ...  # mint replacement
 
 Then update `/etc/pouch/anchor.env` on the anchor host and
 `systemctl restart pouch-anchor`.
+
+## pouch CLI (`pouch put`)
+
+The same release ships `pouch`, a tiny client for sending drops *to*
+your pouch from any shell. Distinct from the anchor — the anchor
+**receives** drops, the CLI **sends** them. Use both, neither, or one.
+
+### Provisioning
+
+On the **pouch server**, an admin runs:
+
+```bash
+pouch key create --owner <your-user-id> --label <a-name-you-pick>
+```
+
+The plaintext ingress key is shown **once**. Save it; you'll paste
+it into the CLI's config file.
+
+### Install + scaffold config
+
+```bash
+# Linux amd64 example — pick the right binary for your OS/arch
+curl -fL -o pouch https://github.com/pointegrity/pouch-anchor/releases/latest/download/pouch-linux-amd64
+chmod +x pouch
+sudo install -m 755 pouch /usr/local/bin/
+
+pouch init              # creates ~/.config/pouch/config.env
+$EDITOR ~/.config/pouch/config.env   # paste POUCH_KEY
+```
+
+Config file format:
+
+```
+POUCH_URL=https://pouch.pointegrity.com
+POUCH_KEY=pk_...
+```
+
+### Use it
+
+```bash
+# Pipe stdin
+echo "quick note" | pouch put --label "review"
+git diff | pouch put --label "WIP diff" --tag wip
+
+# File
+pouch put README.md
+pouch put report.pdf --binary --mime application/pdf
+
+# Clipboard (-c or --clipboard)
+pouch put -c
+pouch put -c --label "from clipboard"
+
+# Tags, stream, TTL
+pouch put notes.md --tag work --tag friday --stream kept
+echo ephemeral | pouch put --ttl 1h
+
+# Bare invocation acts as `pouch put` if stdin is piped
+cat ~/.bash_history | tail -100 | pouch
+```
+
+Output is the new drop's `itm-...` id — pipe-friendly:
+
+```bash
+ID=$(echo "test" | pouch put)
+echo "Created $ID"
+```
+
+### Binary input
+
+The CLI **refuses** non-UTF-8 / NUL-containing input by default so an
+accidental `cat image.jpg | pouch put` doesn't land mojibake. Pass
+`--binary --mime <type>` when you really mean it:
+
+```bash
+pouch put image.png --binary --mime image/png
+```
+
+> Pouch's binary-roundtrip story is provisional until the
+> binary-body-support work ships — re-reading a binary drop's body
+> may not preserve bytes exactly. Text drops always roundtrip cleanly.
 
 ## License
 
