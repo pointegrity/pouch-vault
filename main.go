@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -38,7 +39,7 @@ import (
 
 // Version is stamped into heartbeats so the SaaS replication-status
 // panel can flag stale anchor builds. Bump on release.
-const Version = "0.6.0"
+const Version = "0.7.0"
 
 type config struct {
 	pouchURL    string
@@ -46,6 +47,7 @@ type config struct {
 	hmacSecret  string
 	publicURL   string
 	dbPath      string
+	blobsDir    string
 	listenAddr  string
 	name        string
 	heartbeat   time.Duration
@@ -70,6 +72,7 @@ func loadConfig() (*config, error) {
 	flag.StringVar(&c.hmacSecret, "hmac-secret", "", "HMAC shared secret for webhook delivery")
 	flag.StringVar(&c.publicURL, "public-url", "", "where pouch can reach us, e.g. https://anchor.example/hook")
 	flag.StringVar(&c.dbPath, "db", "", "sqlite database path")
+	flag.StringVar(&c.blobsDir, "blobs", "", "directory for materialized binary blobs")
 	flag.StringVar(&c.listenAddr, "addr", "", "listen address")
 	flag.StringVar(&c.name, "name", "", "anchor name (defaults to hostname)")
 	flag.DurationVar(&c.heartbeat, "heartbeat", 30*time.Second, "heartbeat interval")
@@ -107,6 +110,16 @@ func loadConfig() (*config, error) {
 			c.dbPath = envOr("ANCHOR_DB", d)
 		} else {
 			c.dbPath = envOr("ANCHOR_DB", "drops.db")
+		}
+	}
+	if c.blobsDir == "" {
+		// Default: sibling "blobs/" directory next to the DB. The
+		// SQLite file lives in the OS data dir; blobs go right beside
+		// so backups capture both at once.
+		if d, err := dataDir(); err == nil {
+			c.blobsDir = envOr("ANCHOR_BLOBS", filepath.Join(d, "blobs"))
+		} else {
+			c.blobsDir = envOr("ANCHOR_BLOBS", "blobs")
 		}
 	}
 	pickStr(&c.listenAddr, "ANCHOR_LISTEN", ":7780")
@@ -285,14 +298,14 @@ func run() error {
 		// /healthz + the local UI on ANCHOR_LISTEN. Skip if the user
 		// explicitly set ANCHOR_LISTEN=off.
 		if cfg.listenAddr != "" && cfg.listenAddr != "off" {
-			go runLocalListener(ctx, cfg.listenAddr, store, nil)
+			go runLocalListener(ctx, cfg.listenAddr, store, cfg.blobsDir)
 		}
-		log.Printf("pouch-anchor %s pull-mode, db=%s, pouch=%s",
-			Version, cfg.dbPath, cfg.pouchURL)
+		log.Printf("pouch-anchor %s pull-mode, db=%s, blobs=%s, pouch=%s",
+			Version, cfg.dbPath, cfg.blobsDir, cfg.pouchURL)
 		if cfg.listenAddr != "off" {
 			log.Printf("local UI: http://%s/ui", normalizeListenForURL(cfg.listenAddr))
 		}
-		runStream(ctx, client, store, cfg.hmacSecret)
+		runStream(ctx, client, store, cfg.hmacSecret, cfg.blobsDir)
 		log.Printf("pouch-anchor: stopped")
 		return nil
 	}
@@ -300,13 +313,13 @@ func run() error {
 	// Push mode: pouch POSTs /hook deliveries to us. Same shape as
 	// the regular webhook receiver (HMAC verify + dedup + insert).
 	// We still mount the local UI on the same listener.
-	receiver := NewReceiver(store, cfg.hmacSecret)
+	receiver := NewReceiver(store, cfg.hmacSecret, cfg.blobsDir)
 	mux := http.NewServeMux()
 	mux.Handle("POST /hook", receiver.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	mountLocalUI(mux, store)
+	mountLocalUI(mux, store, cfg.blobsDir)
 	srv := &http.Server{Addr: cfg.listenAddr, Handler: mux}
 	log.Printf("local UI: http://%s/ui", normalizeListenForURL(cfg.listenAddr))
 
@@ -331,12 +344,12 @@ func run() error {
 // there's no /hook. The mux comes pre-wired by mountLocalUI; the
 // extra arg is for future use (push-mode receivers, anchor-only
 // admin endpoints, etc).
-func runLocalListener(ctx context.Context, addr string, st *Store, _ any) {
+func runLocalListener(ctx context.Context, addr string, st *Store, blobsDir string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	mountLocalUI(mux, st)
+	mountLocalUI(mux, st, blobsDir)
 	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
 		<-ctx.Done()

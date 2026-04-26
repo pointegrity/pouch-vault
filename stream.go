@@ -20,7 +20,7 @@ import (
 // 60s. Pouch's keep-alive comments every 25s keep the connection
 // fresh through proxies; anything longer than that without traffic
 // triggers a reconnect.
-func runStream(ctx context.Context, client *PouchClient, store *Store, hmacSecret string) {
+func runStream(ctx context.Context, client *PouchClient, store *Store, hmacSecret, blobsDir string) {
 	dedup := newDedupRing(1024)
 	delay := 2 * time.Second
 	const maxDelay = 60 * time.Second
@@ -29,7 +29,7 @@ func runStream(ctx context.Context, client *PouchClient, store *Store, hmacSecre
 		if ctx.Err() != nil {
 			return
 		}
-		err := streamOnce(ctx, client, store, hmacSecret, dedup)
+		err := streamOnce(ctx, client, store, hmacSecret, blobsDir, dedup)
 		if ctx.Err() != nil {
 			return
 		}
@@ -55,7 +55,7 @@ func runStream(ctx context.Context, client *PouchClient, store *Store, hmacSecre
 
 // streamOnce holds one SSE connection until it ends. Returns the
 // reason the connection ended; nil for a clean server-side close.
-func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecret string, dedup *dedupRing) error {
+func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecret, blobsDir string, dedup *dedupRing) error {
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		client.BaseURL+"/api/anchor/stream", nil)
 	if err != nil {
@@ -100,7 +100,7 @@ func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecr
 		if dedup.Seen(ev.id) {
 			continue
 		}
-		if err := handleStreamDrop(ctx, store, hmacSecret, ev); err != nil {
+		if err := handleStreamDrop(ctx, store, hmacSecret, blobsDir, ev); err != nil {
 			log.Printf("stream: drop %s: %v", ev.id, err)
 			// Keep going — one bad event shouldn't sink the loop.
 		}
@@ -114,7 +114,7 @@ func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecr
 //
 // `body` is the raw JSON the webhook receiver would have parsed —
 // HMAC is computed over those bytes.
-func handleStreamDrop(ctx context.Context, store *Store, hmacSecret string, ev *sseEvent) error {
+func handleStreamDrop(ctx context.Context, store *Store, hmacSecret, blobsDir string, ev *sseEvent) error {
 	var wrapper struct {
 		Sig      string `json:"sig"`
 		Delivery string `json:"delivery"`
@@ -148,6 +148,24 @@ func handleStreamDrop(ctx context.Context, store *Store, hmacSecret string, ev *
 		Source:       p.Drop.Source,
 		CreatedAt:    p.Drop.CreatedAt,
 		ReceivedAt:   time.Now().UTC(),
+	}
+	// Phase 2: server handed us a manifest instead of inline bytes.
+	// Fetch the blob from the signed URL, verify sha256, write to
+	// disk, mark the drop as 'blob'-encoded.
+	if p.Drop.Blob != nil {
+		rel, err := fetchBlobToDisk(ctx, blobsDir,
+			p.Drop.Blob.URL, p.Drop.Blob.SHA256, p.Drop.MIME, p.Drop.Blob.Size)
+		if err != nil {
+			return fmt.Errorf("blob fetch %s: %w", drop.DropID, err)
+		}
+		drop.BodyEncoding = "blob"
+		drop.BodyBlobPath = rel
+		drop.BodySHA256 = p.Drop.Blob.SHA256
+		drop.BodySize = p.Drop.Blob.Size
+		drop.Body = ""
+	} else if err := materializeBlob(drop, blobsDir); err != nil {
+		// Phase 1B: inline base64 spilled to disk for non-tiny binaries.
+		log.Printf("stream: materialize %s: %v", drop.DropID, err)
 	}
 	if err := store.Insert(ctx, drop); err != nil {
 		return err

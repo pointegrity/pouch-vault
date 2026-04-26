@@ -20,16 +20,27 @@ type payload struct {
 	PouchUser string    `json:"pouch_user"`
 	Stream    string    `json:"stream"`
 	SentAt    time.Time `json:"sent_at"`
-	Drop      struct {
-		ID           string    `json:"id"`
-		Label        string    `json:"label"`
-		Body         string    `json:"body"`
-		BodyEncoding string    `json:"body_encoding,omitempty"`
-		Tags         []string  `json:"tags,omitempty"`
-		MIME         string    `json:"mime,omitempty"`
-		Source       string    `json:"source,omitempty"`
-		CreatedAt    time.Time `json:"created_at"`
-	} `json:"drop"`
+	Drop      payloadDrop `json:"drop"`
+}
+
+type payloadDrop struct {
+	ID           string         `json:"id"`
+	Label        string         `json:"label"`
+	Body         string         `json:"body"`
+	BodyEncoding string         `json:"body_encoding,omitempty"`
+	// Blob, when present, points at a server-side blob the receiver
+	// should fetch out-of-band. URL is signed + time-limited (5 min).
+	Blob         *payloadBlob   `json:"blob,omitempty"`
+	Tags         []string       `json:"tags,omitempty"`
+	MIME         string         `json:"mime,omitempty"`
+	Source       string         `json:"source,omitempty"`
+	CreatedAt    time.Time      `json:"created_at"`
+}
+
+type payloadBlob struct {
+	URL    string `json:"url"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
 }
 
 // Receiver is the HTTP handler half of pouch-anchor: receives
@@ -38,16 +49,18 @@ type payload struct {
 type Receiver struct {
 	store      *Store
 	hmacSecret string
+	blobsDir   string
 	dedup      *dedupRing
 }
 
 // NewReceiver constructs the receiver bound to a concrete store +
 // shared HMAC secret. The secret was minted by `pouch anchor create`
 // on the server side and copied into the anchor's config.
-func NewReceiver(store *Store, hmacSecret string) *Receiver {
+func NewReceiver(store *Store, hmacSecret, blobsDir string) *Receiver {
 	return &Receiver{
 		store:      store,
 		hmacSecret: hmacSecret,
+		blobsDir:   blobsDir,
 		dedup:      newDedupRing(1024),
 	}
 }
@@ -91,6 +104,9 @@ func (r *Receiver) Handler() http.HandlerFunc {
 			Source:       p.Drop.Source,
 			CreatedAt:    p.Drop.CreatedAt,
 			ReceivedAt:   time.Now().UTC(),
+		}
+		if err := materializeBlob(drop, r.blobsDir); err != nil {
+			log.Printf("recv: materialize %s: %v", drop.DropID, err)
 		}
 		if err := r.store.Insert(req.Context(), drop); err != nil {
 			log.Printf("store insert %s: %v", drop.DropID, err)

@@ -18,8 +18,21 @@ type Drop struct {
 	PouchUser    string
 	Stream       string
 	Label        string
+
+	// Body is the inline payload — utf8 text or base64 binary —
+	// when small enough to live in SQLite. For binary drops over
+	// the inline threshold it's empty and the canonical bytes live
+	// at BodyBlobPath.
 	Body         string
-	BodyEncoding string // "utf8" | "base64" — same as items.body_encoding
+	BodyEncoding string // "utf8" | "base64" | "blob"
+
+	// Set when BodyEncoding == "blob": canonical SHA-256 of the
+	// decoded bytes, the on-disk relative path, and the byte size.
+	// The local /api/local/blobs/{sha256} route streams the file.
+	BodySHA256   string
+	BodyBlobPath string
+	BodySize     int64
+
 	Tags         []string
 	MIME         string
 	Source       string
@@ -55,6 +68,9 @@ CREATE INDEX IF NOT EXISTS idx_drops_us     ON drops(pouch_user, stream, receive
 // older anchor builds. New columns added since v0.5.0 land here.
 const migrateSQL = `
 ALTER TABLE drops ADD COLUMN body_encoding TEXT NOT NULL DEFAULT 'utf8';
+ALTER TABLE drops ADD COLUMN body_sha256 TEXT;
+ALTER TABLE drops ADD COLUMN body_blob_path TEXT;
+ALTER TABLE drops ADD COLUMN body_size INTEGER NOT NULL DEFAULT 0;
 `
 
 // OpenStore creates / opens an anchor's local DB. _journal=WAL keeps
@@ -110,13 +126,23 @@ func (s *Store) Insert(ctx context.Context, d *Drop) error {
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO drops
-		  (delivery_id, drop_id, pouch_user, stream, label, body, body_encoding, tags,
+		  (delivery_id, drop_id, pouch_user, stream, label, body, body_encoding,
+		   body_sha256, body_blob_path, body_size, tags,
 		   mime, source, created_at, received_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, d.DeliveryID, d.DropID, d.PouchUser, d.Stream,
-		d.Label, d.Body, enc, tagsJSON, d.MIME, d.Source,
+		d.Label, d.Body, enc,
+		nullStr(d.BodySHA256), nullStr(d.BodyBlobPath), d.BodySize,
+		tagsJSON, d.MIME, d.Source,
 		d.CreatedAt, d.ReceivedAt)
 	return err
+}
+
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // List returns up to `limit` drops, newest first. If `search` is
@@ -164,11 +190,16 @@ func (s *Store) List(ctx context.Context, search string, limit int) ([]Drop, err
 	for rows.Next() {
 		var d Drop
 		var tagsStr string
+		var sha, blobPath sql.NullString
 		if err := rows.Scan(&d.DeliveryID, &d.DropID, &d.PouchUser, &d.Stream,
-			&d.Label, &d.Body, &d.BodyEncoding, &tagsStr, &d.MIME, &d.Source,
+			&d.Label, &d.Body, &d.BodyEncoding,
+			&sha, &blobPath, &d.BodySize,
+			&tagsStr, &d.MIME, &d.Source,
 			&d.CreatedAt, &d.ReceivedAt); err != nil {
 			return nil, err
 		}
+		d.BodySHA256 = sha.String
+		d.BodyBlobPath = blobPath.String
 		if tagsStr != "" && tagsStr != "[]" {
 			_ = json.Unmarshal([]byte(tagsStr), &d.Tags)
 		}
@@ -177,13 +208,47 @@ func (s *Store) List(ctx context.Context, search string, limit int) ([]Drop, err
 	return out, rows.Err()
 }
 
+// GetByBlobSHA returns the most recent drop pointing at a blob with
+// this sha256 — used by the local UI's /blobs/{sha} handler to
+// figure out the right Content-Type to serve the bytes with.
+// (nil, nil) when no drop references it.
+func (s *Store) GetByBlobSHA(ctx context.Context, sha string) (*Drop, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT delivery_id, drop_id, pouch_user, stream, label, body, body_encoding,
+		       body_sha256, body_blob_path, body_size, tags,
+		       mime, source, created_at, received_at
+		FROM drops
+		WHERE body_sha256 = ?
+		ORDER BY received_at DESC
+		LIMIT 1
+	`, sha)
+	var d Drop
+	var tagsStr string
+	var bsha, blobPath sql.NullString
+	err := row.Scan(&d.DeliveryID, &d.DropID, &d.PouchUser, &d.Stream,
+		&d.Label, &d.Body, &d.BodyEncoding,
+		&bsha, &blobPath, &d.BodySize,
+		&tagsStr, &d.MIME, &d.Source,
+		&d.CreatedAt, &d.ReceivedAt)
+	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return nil, nil
+		}
+		return nil, err
+	}
+	d.BodySHA256 = bsha.String
+	d.BodyBlobPath = blobPath.String
+	return &d, nil
+}
+
 // Get returns one drop by drop_id (the pouch-side itm-... id). The
 // id is unique-enough for our purposes; in the unlikely event of a
 // collision (would require pouch sending the same drop_id twice with
 // different delivery_ids), we return the most recent.
 func (s *Store) Get(ctx context.Context, dropID string) (*Drop, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT delivery_id, drop_id, pouch_user, stream, label, body, body_encoding, tags,
+		SELECT delivery_id, drop_id, pouch_user, stream, label, body, body_encoding,
+		       body_sha256, body_blob_path, body_size, tags,
 		       mime, source, created_at, received_at
 		FROM drops
 		WHERE drop_id = ?
@@ -192,9 +257,14 @@ func (s *Store) Get(ctx context.Context, dropID string) (*Drop, error) {
 	`, dropID)
 	var d Drop
 	var tagsStr string
+	var sha, blobPath sql.NullString
 	err := row.Scan(&d.DeliveryID, &d.DropID, &d.PouchUser, &d.Stream,
-		&d.Label, &d.Body, &d.BodyEncoding, &tagsStr, &d.MIME, &d.Source,
+		&d.Label, &d.Body, &d.BodyEncoding,
+		&sha, &blobPath, &d.BodySize,
+		&tagsStr, &d.MIME, &d.Source,
 		&d.CreatedAt, &d.ReceivedAt)
+	d.BodySHA256 = sha.String
+	d.BodyBlobPath = blobPath.String
 	if err != nil {
 		if err.Error() == "sql: no rows in result set" {
 			return nil, nil

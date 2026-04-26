@@ -16,7 +16,9 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 )
@@ -24,9 +26,10 @@ import (
 //go:embed localui.html
 var localUIHTML []byte
 
-// mountLocalUI registers the handlers on mux. Caller passes the live
-// store + status singleton. Both push and pull modes call this.
-func mountLocalUI(mux *http.ServeMux, st *Store) {
+// mountLocalUI registers the handlers on mux. Caller passes the
+// live store + the on-disk blobs directory. Both push and pull
+// modes call this.
+func mountLocalUI(mux *http.ServeMux, st *Store, blobsDir string) {
 	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -95,7 +98,57 @@ func mountLocalUI(mux *http.ServeMux, st *Store) {
 		}
 		writeJSON(w, 200, drop)
 	})
+
+	// Blob streaming for materialized binaries. The sha256 is the
+	// path parameter; we glob the sharded subdir to find the file
+	// (extension is cosmetic, so we don't need to know it). Sets
+	// Content-Type from the first row that uses this blob — useful
+	// for browsers rendering <img src="…/blobs/<sha>">.
+	mux.HandleFunc("GET /api/local/blobs/{sha}", func(w http.ResponseWriter, r *http.Request) {
+		sha := r.PathValue("sha")
+		// Defensive: only hex digits, length 64. No path traversal.
+		if !looksLikeSha256(sha) {
+			http.Error(w, "bad sha", 400)
+			return
+		}
+		body, _, err := readBlob(blobsDir, sha)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		// Look up the mime by querying the store for any drop
+		// pointing at this blob. Cheap; one row.
+		mimeStr := "application/octet-stream"
+		if d, _ := st.GetByBlobSHA(r.Context(), sha); d != nil && d.MIME != "" {
+			mimeStr = d.MIME
+		}
+		w.Header().Set("Content-Type", mimeStr)
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = w.Write(body)
+	})
 }
+
+// looksLikeSha256 returns true for a 64-char lowercase hex string.
+func looksLikeSha256(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'f':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")

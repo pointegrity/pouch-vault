@@ -237,19 +237,34 @@ function renderRows() {
   }
 }
 
-// thumbHTML returns a row-thumbnail HTML fragment. For image drops
-// with base64 bodies it's an inline data-URL <img>; for other
-// binaries a small mime-glyph; for text, nothing.
+// thumbHTML returns a row-thumbnail HTML fragment.
+//   binary on disk (encoding='blob')  → <img src="/api/local/blobs/<sha>">
+//   inline base64 (small)             → data-URL <img>
+//   non-image binary                  → mime-glyph
+//   text                              → nothing
 function thumbHTML(d) {
   const cat = mimeCat(d.MIME);
-  if (cat === 'image' && d.BodyEncoding === 'base64') {
-    return `<img class="thumb-img" loading="lazy" src="data:${escapeAttr(d.MIME)};base64,${escapeAttr(d.Body)}" alt="">`;
+  const src = bodySrc(d);
+  if (cat === 'image' && src) {
+    return `<img class="thumb-img" loading="lazy" src="${src}" alt="">`;
   }
-  if (cat !== 'text' && d.BodyEncoding === 'base64') {
+  if (cat !== 'text' && (d.BodyEncoding === 'base64' || d.BodyEncoding === 'blob')) {
     const glyph = cat === 'audio' ? '♪' :
                   cat === 'video' ? '▶' :
                   cat === 'pdf'   ? 'pdf' : '⚙';
     return `<span class="thumb-icon" title="${escapeAttr(d.MIME || 'binary')}">${glyph}</span>`;
+  }
+  return '';
+}
+
+// bodySrc returns a URL the browser can use to render the drop's
+// bytes (img/audio/video src). Returns "" for text drops.
+function bodySrc(d) {
+  if (d.BodyEncoding === 'blob' && d.BodySHA256) {
+    return '/api/local/blobs/' + encodeURIComponent(d.BodySHA256);
+  }
+  if (d.BodyEncoding === 'base64' && d.Body) {
+    return `data:${escapeAttr(d.MIME || 'application/octet-stream')};base64,${escapeAttr(d.Body)}`;
   }
   return '';
 }
@@ -302,16 +317,18 @@ function toggleDetail(tr, d) {
 // cell, dispatching on mime + encoding.
 function renderBodyHTML(d) {
   const cat = mimeCat(d.MIME);
-  if (d.BodyEncoding === 'base64') {
-    const url = `data:${escapeAttr(d.MIME || 'application/octet-stream')};base64,${escapeAttr(d.Body)}`;
-    if (cat === 'image') return `<img class="body-image" src="${url}" alt="${escapeAttr(d.Label || '')}">`;
-    if (cat === 'audio') return `<audio controls src="${url}"></audio>`;
-    if (cat === 'video') return `<video class="body-image" controls src="${url}"></video>`;
-    const sizeApprox = Math.round((d.Body.length * 3) / 4);
+  const src = bodySrc(d);
+  if (src) {
+    if (cat === 'image') return `<img class="body-image" src="${src}" alt="${escapeAttr(d.Label || '')}">`;
+    if (cat === 'audio') return `<audio controls src="${src}"></audio>`;
+    if (cat === 'video') return `<video class="body-image" controls src="${src}"></video>`;
+    const size = d.BodyEncoding === 'blob'
+      ? d.BodySize
+      : Math.round((d.Body.length * 3) / 4);
     return `
       <div class="body-binary">
-        <strong>${escapeHTML(d.MIME || 'binary')}</strong> · ${humanBytes(sizeApprox)}
-        <a download="${escapeAttr(d.Label || d.DropID)}" href="${url}">Download</a>
+        <strong>${escapeHTML(d.MIME || 'binary')}</strong> · ${humanBytes(size)}
+        <a download="${escapeAttr(d.Label || d.DropID)}" href="${src}">Download</a>
       </div>`;
   }
   return `<pre>${escapeHTML(d.Body || '')}</pre>`;
