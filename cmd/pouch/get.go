@@ -80,34 +80,65 @@ func runGet(args []string) error {
 	}
 
 	// /api/items/{id} returns {"item": {...}, "children": [...]} —
-	// extract the item.body for stdout. If body_encoding=base64,
-	// decode before writing so files come back as the actual bytes,
-	// not their base64 representation.
+	// extract the bytes correctly per encoding:
+	//   utf8   → write item.body verbatim
+	//   base64 → decode item.body
+	//   blob   → fetch /api/blobs/<id> separately
 	var rec struct {
 		Item struct {
 			Body         string `json:"body"`
 			BodyEncoding string `json:"body_encoding,omitempty"`
+			BodyBlobID   string `json:"body_blob_id,omitempty"`
 			MIME         string `json:"mime,omitempty"`
 		} `json:"item"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&rec); err != nil {
 		return fmt.Errorf("decode: %w", err)
 	}
-	out := []byte(rec.Item.Body)
-	if rec.Item.BodyEncoding == "base64" {
+	var out []byte
+	switch rec.Item.BodyEncoding {
+	case "blob":
+		if rec.Item.BodyBlobID == "" {
+			return errors.New("blob-encoded item has no blob id")
+		}
+		blobURL := strings.TrimRight(cfg.URL, "/") + "/api/blobs/" + rec.Item.BodyBlobID
+		req2, _ := http.NewRequest("GET", blobURL, nil)
+		req2.Header.Set("Authorization", "Bearer "+tok)
+		req2.Header.Set("User-Agent", "pouch-cli/"+Version)
+		r2, err := cl.Do(req2)
+		if err != nil {
+			return fmt.Errorf("fetch blob: %w", err)
+		}
+		defer r2.Body.Close()
+		if r2.StatusCode >= 400 {
+			buf, _ := io.ReadAll(io.LimitReader(r2.Body, 1024))
+			return fmt.Errorf("fetch blob %d: %s", r2.StatusCode, strings.TrimSpace(string(buf)))
+		}
+		out, err = io.ReadAll(r2.Body)
+		if err != nil {
+			return err
+		}
+	case "base64":
 		decoded, err := base64.StdEncoding.DecodeString(rec.Item.Body)
 		if err != nil {
 			return fmt.Errorf("decode base64 body: %w", err)
 		}
 		out = decoded
+	default:
+		out = []byte(rec.Item.Body)
 	}
 	if *outFile != "" {
 		if err := os.WriteFile(*outFile, out, 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", *outFile, err)
 		}
-		fmt.Fprintf(os.Stderr, "wrote %d bytes to %s%s\n",
-			len(out), *outFile,
-			ternaryStr(rec.Item.BodyEncoding == "base64", " (decoded from base64)", ""))
+		note := ""
+		switch rec.Item.BodyEncoding {
+		case "base64":
+			note = " (decoded from base64)"
+		case "blob":
+			note = " (streamed from blob storage)"
+		}
+		fmt.Fprintf(os.Stderr, "wrote %d bytes to %s%s\n", len(out), *outFile, note)
 		return nil
 	}
 	// To stdout — only safe if it's text or the user is piping somewhere.
@@ -119,9 +150,3 @@ func runGet(args []string) error {
 	return nil
 }
 
-func ternaryStr(b bool, t, f string) string {
-	if b {
-		return t
-	}
-	return f
-}

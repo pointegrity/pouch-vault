@@ -12,10 +12,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
+
+// inlineUploadCap is the threshold above which `pouch put` switches
+// from the simple /ingress/{key} path to the blob path (POST /api/blobs
+// then POST /api/items). Matches pouch's MaxBodyBytes default minus
+// some slack for headers + JSON overhead.
+const inlineUploadCap = 1 << 20
 
 // runPut implements `pouch put` — read a body from FILE / stdin /
 // clipboard, send it to the pouch ingress endpoint as a drop.
@@ -140,6 +147,14 @@ func runPut(args []string) error {
 		*label = firstNonEmptyLine(body, defaultLabel, 80)
 	}
 
+	// Auto-route by size. Files over the inline cap go through the
+	// blob path (POST /api/blobs + POST /api/items, both token-auth).
+	// Smaller stays on the simple ingress key path.
+	if len(body) > inlineUploadCap {
+		return putViaBlobPath(cfg, body, *label, *mimeType, *stream, *source, *ttl,
+			collectTags(*tags, tagFlag))
+	}
+
 	// Build query string.
 	q := url.Values{}
 	q.Set("label", *label)
@@ -153,24 +168,10 @@ func runPut(args []string) error {
 		q.Set("ttl", *ttl)
 	}
 
-	// Tags: --tags A,B,C plus repeated --tag T. Dedup via set.
-	tagSet := map[string]struct{}{}
-	for _, t := range strings.Split(*tags, ",") {
-		if t = strings.TrimSpace(t); t != "" {
-			tagSet[t] = struct{}{}
-		}
-	}
-	for _, t := range tagFlag {
-		if t = strings.TrimSpace(t); t != "" {
-			tagSet[t] = struct{}{}
-		}
-	}
-	if len(tagSet) > 0 {
-		out := make([]string, 0, len(tagSet))
-		for t := range tagSet {
-			out = append(out, t)
-		}
-		q.Set("tag", strings.Join(out, ","))
+	// Tags via shared helper.
+	tagList := collectTags(*tags, tagFlag)
+	if len(tagList) > 0 {
+		q.Set("tag", strings.Join(tagList, ","))
 	}
 
 	// POST to /ingress/<key> with raw body bytes. The endpoint reads
@@ -206,6 +207,130 @@ func runPut(args []string) error {
 	}
 	fmt.Println(out.ID)
 	return nil
+}
+
+// putViaBlobPath uploads the body as a blob and creates an item that
+// references it. Used for drops over inlineUploadCap. Requires the
+// user to be logged in — the blob endpoints are token-auth only.
+//
+// Two HTTP calls:
+//
+//	POST /api/blobs               — body bytes; returns {id, sha256, size}
+//	POST /api/items               — JSON {label, body_blob_id, mime, ...}
+//
+// Prints the new item id on success, same as the inline path.
+func putViaBlobPath(cfg *CLIConfig, body []byte, label, mimeType, stream, source, ttl string, tags []string) error {
+	tok, err := loadToken()
+	if err != nil {
+		return err
+	}
+	if tok == "" {
+		return errors.New("file is over 1 MB — large drops use the blob path which requires `pouch login` first")
+	}
+	if mimeType == "" {
+		// Multipart-style: detect from extension if filename hint exists,
+		// else fall back to octet-stream so server stores something.
+		mimeType = "application/octet-stream"
+	}
+
+	cl := &http.Client{Timeout: 5 * time.Minute}
+
+	// 1. Upload bytes.
+	blobURL := strings.TrimRight(cfg.URL, "/") + "/api/blobs"
+	req, err := http.NewRequest("POST", blobURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", mimeType)
+	req.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	req.Header.Set("User-Agent", "pouch-cli/"+Version)
+
+	resp, err := cl.Do(req)
+	if err != nil {
+		return fmt.Errorf("blob upload: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("blob upload %d: %s", resp.StatusCode, strings.TrimSpace(string(buf)))
+	}
+	var blob struct {
+		ID     string `json:"id"`
+		SHA256 string `json:"sha256"`
+		Size   int64  `json:"size"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&blob); err != nil {
+		return fmt.Errorf("decode blob response: %w", err)
+	}
+
+	// 2. Create item referencing the blob.
+	itemPayload := map[string]any{
+		"label":         label,
+		"body_blob_id":  blob.ID,
+		"body_encoding": "blob",
+		"mime":          mimeType,
+		"source":        source,
+	}
+	if stream != "" {
+		itemPayload["stream"] = stream
+	}
+	if len(tags) > 0 {
+		itemPayload["tags"] = tags
+	}
+	if ttl != "" {
+		if d, err := time.ParseDuration(ttl); err == nil {
+			itemPayload["ttl_at"] = time.Now().Add(d).UTC().Format(time.RFC3339)
+		}
+	}
+	itemBody, _ := json.Marshal(itemPayload)
+	itemURL := strings.TrimRight(cfg.URL, "/") + "/api/items"
+	req2, _ := http.NewRequest("POST", itemURL, bytes.NewReader(itemBody))
+	req2.Header.Set("Authorization", "Bearer "+tok)
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("User-Agent", "pouch-cli/"+Version)
+
+	resp2, err := cl.Do(req2)
+	if err != nil {
+		return fmt.Errorf("create item: %w", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode >= 400 {
+		buf, _ := io.ReadAll(io.LimitReader(resp2.Body, 1024))
+		return fmt.Errorf("create item %d: %s", resp2.StatusCode, strings.TrimSpace(string(buf)))
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&out); err != nil {
+		return fmt.Errorf("decode item response: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "uploaded %s (%s, %d bytes) as blob %s\n",
+		label, mimeType, blob.Size, blob.ID)
+	fmt.Println(out.ID)
+	return nil
+}
+
+// collectTags merges --tags=A,B,C with repeated --tag T flags into
+// a deduped list. Order is not stable (map iteration); doesn't matter
+// for tags semantically.
+func collectTags(comma string, repeated stringSlice) []string {
+	set := map[string]struct{}{}
+	for _, t := range strings.Split(comma, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			set[t] = struct{}{}
+		}
+	}
+	for _, t := range repeated {
+		if t = strings.TrimSpace(t); t != "" {
+			set[t] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for t := range set {
+		out = append(out, t)
+	}
+	return out
 }
 
 // stringSlice is a flag.Value for repeated string flags (--tag a --tag b).
