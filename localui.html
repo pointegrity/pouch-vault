@@ -61,6 +61,16 @@
             border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
     th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border);
              font-size: 0.85rem; vertical-align: top; }
+    td.thumb { width: 36px; padding: 0.4rem 0.5rem; }
+    .thumb-img { width: 24px; height: 24px; border-radius: 3px; object-fit: cover;
+                  background: #eee; display: block; }
+    .thumb-icon { width: 24px; height: 24px; display: inline-flex; align-items: center;
+                   justify-content: center; border: 1px solid var(--border);
+                   border-radius: 3px; font-size: 0.7rem; color: var(--muted); }
+    .body-image { max-width: 100%; max-height: 360px; border-radius: 4px; display: block; margin: 0.4rem 0; }
+    .body-binary { padding: 0.5rem 0.75rem; background: #fff; border: 1px dashed var(--border);
+                    border-radius: 4px; color: var(--muted); }
+    .body-binary a { color: var(--accent); margin-left: 0.5rem; }
     th { background: #fafaf9; font-weight: 600; color: var(--muted);
          text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.04em; }
     tr:last-child td { border-bottom: none; }
@@ -107,7 +117,7 @@
 
   <table>
     <thead>
-      <tr><th>Time</th><th>Stream</th><th>Label</th><th>ID</th></tr>
+      <tr><th></th><th>Time</th><th>Stream</th><th>Label</th><th>ID</th></tr>
     </thead>
     <tbody id="rows"></tbody>
   </table>
@@ -209,7 +219,7 @@ function renderRows() {
 
   if (rowsCache.length === 0) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="4" class="empty">No drops yet — once your pouch sends one, it'll appear here.</td>`;
+    tr.innerHTML = `<td colspan="5" class="empty">No drops yet — once your pouch sends one, it'll appear here.</td>`;
     tbody.appendChild(tr);
     return;
   }
@@ -217,6 +227,7 @@ function renderRows() {
     const tr = document.createElement('tr');
     tr.className = 'row';
     tr.innerHTML = `
+      <td class="thumb">${thumbHTML(d)}</td>
       <td class="time" title="${fmtAbs(d.ReceivedAt)}">${fmtRel(d.ReceivedAt)}</td>
       <td class="stream">${escapeHTML(d.Stream || '—')}</td>
       <td class="label">${escapeHTML(d.Label || '(no label)')}</td>
@@ -224,6 +235,39 @@ function renderRows() {
     tr.addEventListener('click', () => toggleDetail(tr, d));
     tbody.appendChild(tr);
   }
+}
+
+// thumbHTML returns a row-thumbnail HTML fragment. For image drops
+// with base64 bodies it's an inline data-URL <img>; for other
+// binaries a small mime-glyph; for text, nothing.
+function thumbHTML(d) {
+  const cat = mimeCat(d.MIME);
+  if (cat === 'image' && d.BodyEncoding === 'base64') {
+    return `<img class="thumb-img" loading="lazy" src="data:${escapeAttr(d.MIME)};base64,${escapeAttr(d.Body)}" alt="">`;
+  }
+  if (cat !== 'text' && d.BodyEncoding === 'base64') {
+    const glyph = cat === 'audio' ? '♪' :
+                  cat === 'video' ? '▶' :
+                  cat === 'pdf'   ? 'pdf' : '⚙';
+    return `<span class="thumb-icon" title="${escapeAttr(d.MIME || 'binary')}">${glyph}</span>`;
+  }
+  return '';
+}
+
+function mimeCat(m) {
+  if (!m) return 'text';
+  if (m.startsWith('image/')) return 'image';
+  if (m.startsWith('audio/')) return 'audio';
+  if (m.startsWith('video/')) return 'video';
+  if (m === 'application/pdf') return 'pdf';
+  if (m.startsWith('text/') || m === 'application/json' ||
+      m === 'application/yaml' || m === 'application/x-yaml') return 'text';
+  return 'binary';
+}
+
+function escapeAttr(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
 }
 
 function toggleDetail(tr, d) {
@@ -235,7 +279,7 @@ function toggleDetail(tr, d) {
   const row = document.createElement('tr');
   row.dataset.for = d.DropID;
   const td = document.createElement('td');
-  td.colSpan = 4;
+  td.colSpan = 5;
   td.className = 'detail';
   const tagsHTML = (d.Tags && d.Tags.length)
     ? d.Tags.map(t => `<b>tag:</b>${escapeHTML(t)}`).join(' ') : '';
@@ -245,12 +289,38 @@ function toggleDetail(tr, d) {
       <span><b>received:</b>${fmtAbs(d.ReceivedAt)}</span>
       <span><b>source:</b>${escapeHTML(d.Source || '—')}</span>
       ${d.MIME ? `<span><b>mime:</b>${escapeHTML(d.MIME)}</span>` : ''}
+      ${d.BodyEncoding === 'base64' ? '<span><b>encoding:</b>base64</span>' : ''}
       ${tagsHTML}
     </div>
-    <pre>${escapeHTML(d.Body || '')}</pre>`;
+    ${renderBodyHTML(d)}`;
   row.appendChild(td);
   tr.parentNode.insertBefore(row, tr.nextSibling);
   expandedRow = row;
+}
+
+// renderBodyHTML returns a string of HTML to drop into the detail
+// cell, dispatching on mime + encoding.
+function renderBodyHTML(d) {
+  const cat = mimeCat(d.MIME);
+  if (d.BodyEncoding === 'base64') {
+    const url = `data:${escapeAttr(d.MIME || 'application/octet-stream')};base64,${escapeAttr(d.Body)}`;
+    if (cat === 'image') return `<img class="body-image" src="${url}" alt="${escapeAttr(d.Label || '')}">`;
+    if (cat === 'audio') return `<audio controls src="${url}"></audio>`;
+    if (cat === 'video') return `<video class="body-image" controls src="${url}"></video>`;
+    const sizeApprox = Math.round((d.Body.length * 3) / 4);
+    return `
+      <div class="body-binary">
+        <strong>${escapeHTML(d.MIME || 'binary')}</strong> · ${humanBytes(sizeApprox)}
+        <a download="${escapeAttr(d.Label || d.DropID)}" href="${url}">Download</a>
+      </div>`;
+  }
+  return `<pre>${escapeHTML(d.Body || '')}</pre>`;
+}
+
+function humanBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+  return (n/1024/1024).toFixed(2) + ' MB';
 }
 
 function escapeHTML(s) {

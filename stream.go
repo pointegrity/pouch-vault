@@ -136,17 +136,18 @@ func handleStreamDrop(ctx context.Context, store *Store, hmacSecret string, ev *
 		delivery = ev.id
 	}
 	drop := &Drop{
-		DeliveryID: deliveryOrFallback(delivery, p.Drop.ID),
-		DropID:     p.Drop.ID,
-		PouchUser:  p.PouchUser,
-		Stream:     p.Stream,
-		Label:      p.Drop.Label,
-		Body:       p.Drop.Body,
-		Tags:       p.Drop.Tags,
-		MIME:       p.Drop.MIME,
-		Source:     p.Drop.Source,
-		CreatedAt:  p.Drop.CreatedAt,
-		ReceivedAt: time.Now().UTC(),
+		DeliveryID:   deliveryOrFallback(delivery, p.Drop.ID),
+		DropID:       p.Drop.ID,
+		PouchUser:    p.PouchUser,
+		Stream:       p.Stream,
+		Label:        p.Drop.Label,
+		Body:         p.Drop.Body,
+		BodyEncoding: p.Drop.BodyEncoding,
+		Tags:         p.Drop.Tags,
+		MIME:         p.Drop.MIME,
+		Source:       p.Drop.Source,
+		CreatedAt:    p.Drop.CreatedAt,
+		ReceivedAt:   time.Now().UTC(),
 	}
 	if err := store.Insert(ctx, drop); err != nil {
 		return err

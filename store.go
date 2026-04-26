@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -12,17 +13,18 @@ import (
 
 // Drop is the row we persist per webhook delivery.
 type Drop struct {
-	DeliveryID string // X-Pouch-Delivery (idempotency)
-	DropID     string // pouch's itm-... id
-	PouchUser  string
-	Stream     string
-	Label      string
-	Body       string
-	Tags       []string
-	MIME       string
-	Source     string
-	CreatedAt  time.Time
-	ReceivedAt time.Time
+	DeliveryID   string // X-Pouch-Delivery (idempotency)
+	DropID       string // pouch's itm-... id
+	PouchUser    string
+	Stream       string
+	Label        string
+	Body         string
+	BodyEncoding string // "utf8" | "base64" — same as items.body_encoding
+	Tags         []string
+	MIME         string
+	Source       string
+	CreatedAt    time.Time
+	ReceivedAt   time.Time
 }
 
 // Store is the local sqlite archive (drops + bookkeeping).
@@ -32,23 +34,27 @@ type Store struct {
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS drops (
-  delivery_id TEXT PRIMARY KEY,
-  drop_id     TEXT NOT NULL,
-  pouch_user  TEXT NOT NULL,
-  stream      TEXT NOT NULL,
-  label       TEXT,
-  body        TEXT,
-  tags        TEXT,             -- JSON array
-  mime        TEXT,
-  source      TEXT,
-  created_at  DATETIME NOT NULL,
-  received_at DATETIME NOT NULL
+  delivery_id   TEXT PRIMARY KEY,
+  drop_id       TEXT NOT NULL,
+  pouch_user    TEXT NOT NULL,
+  stream        TEXT NOT NULL,
+  label         TEXT,
+  body          TEXT,
+  body_encoding TEXT NOT NULL DEFAULT 'utf8',
+  tags          TEXT,             -- JSON array
+  mime          TEXT,
+  source        TEXT,
+  created_at    DATETIME NOT NULL,
+  received_at   DATETIME NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_drops_id     ON drops(drop_id);
 CREATE INDEX IF NOT EXISTS idx_drops_us     ON drops(pouch_user, stream, received_at DESC);
+`
 
--- Append-only audit. Useful for "did this drop arrive?" forensics
--- and for the heartbeat report (last drop id seen).
+// migrateSchema applies idempotent ALTER TABLEs for upgrades from
+// older anchor builds. New columns added since v0.5.0 land here.
+const migrateSQL = `
+ALTER TABLE drops ADD COLUMN body_encoding TEXT NOT NULL DEFAULT 'utf8';
 `
 
 // OpenStore creates / opens an anchor's local DB. _journal=WAL keeps
@@ -69,6 +75,20 @@ func OpenStore(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("schema: %w", err)
 	}
+	// Idempotent upgrades. ALTER TABLE on a column that already
+	// exists returns "duplicate column" — swallow that, fail on
+	// anything else.
+	for _, stmt := range strings.Split(migrateSQL, ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if _, err := db.Exec(stmt); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column") {
+			_ = db.Close()
+			return nil, fmt.Errorf("migrate %q: %w", stmt, err)
+		}
+	}
 	return &Store{db: db}, nil
 }
 
@@ -84,13 +104,17 @@ func (s *Store) Insert(ctx context.Context, d *Drop) error {
 			tagsJSON = string(b)
 		}
 	}
+	enc := d.BodyEncoding
+	if enc == "" {
+		enc = "utf8"
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO drops
-		  (delivery_id, drop_id, pouch_user, stream, label, body, tags,
+		  (delivery_id, drop_id, pouch_user, stream, label, body, body_encoding, tags,
 		   mime, source, created_at, received_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, d.DeliveryID, d.DropID, d.PouchUser, d.Stream,
-		d.Label, d.Body, tagsJSON, d.MIME, d.Source,
+		d.Label, d.Body, enc, tagsJSON, d.MIME, d.Source,
 		d.CreatedAt, d.ReceivedAt)
 	return err
 }
@@ -141,7 +165,7 @@ func (s *Store) List(ctx context.Context, search string, limit int) ([]Drop, err
 		var d Drop
 		var tagsStr string
 		if err := rows.Scan(&d.DeliveryID, &d.DropID, &d.PouchUser, &d.Stream,
-			&d.Label, &d.Body, &tagsStr, &d.MIME, &d.Source,
+			&d.Label, &d.Body, &d.BodyEncoding, &tagsStr, &d.MIME, &d.Source,
 			&d.CreatedAt, &d.ReceivedAt); err != nil {
 			return nil, err
 		}
@@ -159,7 +183,7 @@ func (s *Store) List(ctx context.Context, search string, limit int) ([]Drop, err
 // different delivery_ids), we return the most recent.
 func (s *Store) Get(ctx context.Context, dropID string) (*Drop, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT delivery_id, drop_id, pouch_user, stream, label, body, tags,
+		SELECT delivery_id, drop_id, pouch_user, stream, label, body, body_encoding, tags,
 		       mime, source, created_at, received_at
 		FROM drops
 		WHERE drop_id = ?
@@ -169,7 +193,7 @@ func (s *Store) Get(ctx context.Context, dropID string) (*Drop, error) {
 	var d Drop
 	var tagsStr string
 	err := row.Scan(&d.DeliveryID, &d.DropID, &d.PouchUser, &d.Stream,
-		&d.Label, &d.Body, &tagsStr, &d.MIME, &d.Source,
+		&d.Label, &d.Body, &d.BodyEncoding, &tagsStr, &d.MIME, &d.Source,
 		&d.CreatedAt, &d.ReceivedAt)
 	if err != nil {
 		if err.Error() == "sql: no rows in result set" {

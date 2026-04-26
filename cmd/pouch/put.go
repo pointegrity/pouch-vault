@@ -122,13 +122,14 @@ func runPut(args []string) error {
 	}
 
 	// Binary guard: if the bytes don't look like text (invalid UTF-8
-	// or contain NUL), refuse unless --binary.
+	// or contain NUL), require --binary so an accidental
+	// `cat image.jpg | pouch put` doesn't sneak through with a
+	// confusing default label.
 	if !looksLikeText(body) && !*binaryOK {
 		return errors.New(
 			"input looks binary (invalid UTF-8 or contains NUL bytes).\n" +
 				"  - if intentional: pass --binary --mime <type> (e.g. --mime image/png)\n" +
-				"  - note: pouch's binary-roundtrip support is provisional until binary-body-support ships,\n" +
-				"    so re-reading the drop body may not preserve bytes exactly")
+				"  - inline binary cap is 1 MB raw — pouch will base64-encode for you")
 	}
 	if *binaryOK && *mimeType == "" {
 		return errors.New("--binary requires --mime (e.g. --mime image/png, --mime audio/wav, --mime application/pdf)")

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -79,24 +80,48 @@ func runGet(args []string) error {
 	}
 
 	// /api/items/{id} returns {"item": {...}, "children": [...]} —
-	// extract the item.body for stdout.
+	// extract the item.body for stdout. If body_encoding=base64,
+	// decode before writing so files come back as the actual bytes,
+	// not their base64 representation.
 	var rec struct {
 		Item struct {
-			Body string `json:"body"`
+			Body         string `json:"body"`
+			BodyEncoding string `json:"body_encoding,omitempty"`
+			MIME         string `json:"mime,omitempty"`
 		} `json:"item"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&rec); err != nil {
 		return fmt.Errorf("decode: %w", err)
 	}
+	out := []byte(rec.Item.Body)
+	if rec.Item.BodyEncoding == "base64" {
+		decoded, err := base64.StdEncoding.DecodeString(rec.Item.Body)
+		if err != nil {
+			return fmt.Errorf("decode base64 body: %w", err)
+		}
+		out = decoded
+	}
 	if *outFile != "" {
-		if err := os.WriteFile(*outFile, []byte(rec.Item.Body), 0o644); err != nil {
+		if err := os.WriteFile(*outFile, out, 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", *outFile, err)
 		}
-		fmt.Fprintf(os.Stderr, "wrote %d bytes to %s\n", len(rec.Item.Body), *outFile)
+		fmt.Fprintf(os.Stderr, "wrote %d bytes to %s%s\n",
+			len(out), *outFile,
+			ternaryStr(rec.Item.BodyEncoding == "base64", " (decoded from base64)", ""))
 		return nil
 	}
-	if _, err := os.Stdout.Write([]byte(rec.Item.Body)); err != nil {
+	// To stdout — only safe if it's text or the user is piping somewhere.
+	// We do not gate this; if you `pouch get image-id` to a tty you
+	// asked for that. Pipe to a file or use -o for binary.
+	if _, err := os.Stdout.Write(out); err != nil {
 		return err
 	}
 	return nil
+}
+
+func ternaryStr(b bool, t, f string) string {
+	if b {
+		return t
+	}
+	return f
 }

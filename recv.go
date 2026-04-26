@@ -21,13 +21,14 @@ type payload struct {
 	Stream    string    `json:"stream"`
 	SentAt    time.Time `json:"sent_at"`
 	Drop      struct {
-		ID        string    `json:"id"`
-		Label     string    `json:"label"`
-		Body      string    `json:"body"`
-		Tags      []string  `json:"tags,omitempty"`
-		MIME      string    `json:"mime,omitempty"`
-		Source    string    `json:"source,omitempty"`
-		CreatedAt time.Time `json:"created_at"`
+		ID           string    `json:"id"`
+		Label        string    `json:"label"`
+		Body         string    `json:"body"`
+		BodyEncoding string    `json:"body_encoding,omitempty"`
+		Tags         []string  `json:"tags,omitempty"`
+		MIME         string    `json:"mime,omitempty"`
+		Source       string    `json:"source,omitempty"`
+		CreatedAt    time.Time `json:"created_at"`
 	} `json:"drop"`
 }
 
@@ -78,17 +79,18 @@ func (r *Receiver) Handler() http.HandlerFunc {
 			return
 		}
 		drop := &Drop{
-			DeliveryID: deliveryOrFallback(delivery, p.Drop.ID),
-			DropID:     p.Drop.ID,
-			PouchUser:  p.PouchUser,
-			Stream:     p.Stream,
-			Label:      p.Drop.Label,
-			Body:       p.Drop.Body,
-			Tags:       p.Drop.Tags,
-			MIME:       p.Drop.MIME,
-			Source:     p.Drop.Source,
-			CreatedAt:  p.Drop.CreatedAt,
-			ReceivedAt: time.Now().UTC(),
+			DeliveryID:   deliveryOrFallback(delivery, p.Drop.ID),
+			DropID:       p.Drop.ID,
+			PouchUser:    p.PouchUser,
+			Stream:       p.Stream,
+			Label:        p.Drop.Label,
+			Body:         p.Drop.Body,
+			BodyEncoding: p.Drop.BodyEncoding,
+			Tags:         p.Drop.Tags,
+			MIME:         p.Drop.MIME,
+			Source:       p.Drop.Source,
+			CreatedAt:    p.Drop.CreatedAt,
+			ReceivedAt:   time.Now().UTC(),
 		}
 		if err := r.store.Insert(req.Context(), drop); err != nil {
 			log.Printf("store insert %s: %v", drop.DropID, err)

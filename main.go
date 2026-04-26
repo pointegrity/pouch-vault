@@ -38,7 +38,7 @@ import (
 
 // Version is stamped into heartbeats so the SaaS replication-status
 // panel can flag stale anchor builds. Bump on release.
-const Version = "0.5.0"
+const Version = "0.6.0"
 
 type config struct {
 	pouchURL    string
