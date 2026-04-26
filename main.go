@@ -38,7 +38,7 @@ import (
 
 // Version is stamped into heartbeats so the SaaS replication-status
 // panel can flag stale anchor builds. Bump on release.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 type config struct {
 	pouchURL    string
@@ -121,18 +121,23 @@ func loadConfig() (*config, error) {
 	}
 	c.pouchURL = strings.TrimRight(c.pouchURL, "/")
 
+	// Required regardless of mode.
 	for _, m := range []struct {
 		val, name string
 	}{
 		{c.pouchURL, "POUCH_URL"},
 		{c.anchorKey, "POUCH_ANCHOR_KEY"},
 		{c.hmacSecret, "POUCH_HMAC_SECRET"},
-		{c.publicURL, "POUCH_PUBLIC_URL"},
 	} {
 		if m.val == "" {
 			return nil, fmt.Errorf("%s is required", m.name)
 		}
 	}
+	// POUCH_PUBLIC_URL is now OPTIONAL: set → push mode (we listen
+	// on ANCHOR_LISTEN for /hook deliveries from pouch). Unset →
+	// pull mode (we hold an SSE connection open to pouch). Pull
+	// mode is the default and what most users want — no public URL,
+	// no tunneling, no firewall holes.
 	return c, nil
 }
 
@@ -182,7 +187,7 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Fprintln(os.Stderr, `pouch-anchor — local relay daemon for pouch.
+	fmt.Fprint(os.Stderr, `pouch-anchor — local relay daemon for pouch.
 
 Usage:
   pouch-anchor                   run the daemon (reads config from env / file)
@@ -190,13 +195,20 @@ Usage:
   pouch-anchor version           print version and exit
   pouch-anchor help              print this help
 
-Environment / flags for the daemon:
-  POUCH_URL          --pouch-url     pouch SaaS base URL (required)
-  POUCH_ANCHOR_KEY   --anchor-key    anchor API key (required)
-  POUCH_HMAC_SECRET  --hmac-secret   delivery signature secret (required)
-  POUCH_PUBLIC_URL   --public-url    where pouch reaches us (required)
+Required (both modes):
+  POUCH_URL          --pouch-url     pouch SaaS base URL
+  POUCH_ANCHOR_KEY   --anchor-key    anchor API key
+  POUCH_HMAC_SECRET  --hmac-secret   delivery signature secret
+
+Optional:
+  POUCH_PUBLIC_URL   --public-url    enables PUSH mode — pouch POSTs to this URL.
+                                     Unset (default) = PULL mode: anchor opens an
+                                     SSE connection to pouch. Pull mode needs no
+                                     publicly-reachable endpoint, no firewall hole,
+                                     no tunneling. Recommended for most users.
   ANCHOR_DB          --db            sqlite database path
-  ANCHOR_LISTEN      --addr          listen address
+  ANCHOR_LISTEN      --addr          local listener (push mode: receives /hook;
+                                     pull mode: just /healthz; "off" disables)
   ANCHOR_NAME        --name          anchor name (defaults to hostname)
                      --heartbeat     heartbeat interval (default 30s)
                      --config        explicit config file path
@@ -227,21 +239,52 @@ func run() error {
 	defer store.Close()
 
 	// Outbound client (anchor → pouch). Used immediately for register
-	// + every heartbeat thereafter.
+	// + every heartbeat thereafter (and, in pull mode, for the SSE
+	// stream).
 	client := NewPouchClient(cfg.pouchURL, cfg.anchorKey)
 
-	// Register with pouch before opening the listener — if pouch
-	// rejects us (bad key, bad URL), we fail loudly at startup
-	// instead of silently never getting any drops.
+	// Register with pouch. In pull mode publicURL is empty, which
+	// pouch v0.2+ accepts (it tells the dispatcher to route via the
+	// SSE hub instead of HTTP POST).
 	regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	anchorID, err := client.Register(regCtx, cfg.publicURL, hostnameOr("anchor"), Version)
 	regCancel()
 	if err != nil {
 		return fmt.Errorf("register with pouch: %w", err)
 	}
-	log.Printf("registered as %s (name=%s, public_url=%s)", anchorID, cfg.name, cfg.publicURL)
 
-	// Inbound HTTP server (pouch → anchor /hook).
+	mode := "pull"
+	if cfg.publicURL != "" {
+		mode = "push"
+	}
+	log.Printf("registered as %s (name=%s, mode=%s)", anchorID, cfg.name, mode)
+
+	ctx, cancel := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Heartbeat runs in both modes. In pull mode, the SSE connection
+	// is the primary "I'm alive" signal; the heartbeat additionally
+	// reports last_drop_id and total_drops so the SaaS UI can show
+	// archive progress.
+	go runHeartbeats(ctx, client, store, cfg.heartbeat)
+
+	if mode == "pull" {
+		// No inbound listener needed. Just hold the SSE connection
+		// open. /healthz still useful for local health checks if
+		// ANCHOR_LISTEN is set; we open it conditionally.
+		if cfg.listenAddr != "" && cfg.listenAddr != "off" {
+			go runHealthListener(ctx, cfg.listenAddr)
+		}
+		log.Printf("pouch-anchor %s pull-mode, db=%s, pouch=%s",
+			Version, cfg.dbPath, cfg.pouchURL)
+		runStream(ctx, client, store, cfg.hmacSecret)
+		log.Printf("pouch-anchor: stopped")
+		return nil
+	}
+
+	// Push mode: pouch POSTs /hook deliveries to us. Same shape as
+	// the regular webhook receiver (HMAC verify + dedup + insert).
 	receiver := NewReceiver(store, cfg.hmacSecret)
 	mux := http.NewServeMux()
 	mux.Handle("POST /hook", receiver.Handler())
@@ -250,14 +293,6 @@ func run() error {
 	})
 	srv := &http.Server{Addr: cfg.listenAddr, Handler: mux}
 
-	// Lifecycle: heartbeat goroutine + HTTP server, both bound to ctx
-	// so SIGTERM kills both cleanly.
-	ctx, cancel := signal.NotifyContext(context.Background(),
-		syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	go runHeartbeats(ctx, client, store, cfg.heartbeat)
-
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -265,13 +300,34 @@ func run() error {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("pouch-anchor %s listening on %s, db=%s, pouch=%s",
+	log.Printf("pouch-anchor %s push-mode, listening on %s, db=%s, pouch=%s",
 		Version, cfg.listenAddr, cfg.dbPath, cfg.pouchURL)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	log.Printf("pouch-anchor: stopped")
 	return nil
+}
+
+// runHealthListener serves a tiny /healthz on addr. Used in pull
+// mode as the "is the daemon up?" probe — `curl localhost:7780/healthz`
+// is convenient for systemd / launchd / docker healthchecks even
+// when the binary doesn't otherwise need an HTTP server.
+func runHealthListener(ctx context.Context, addr string) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	srv := &http.Server{Addr: addr, Handler: mux}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("healthz listener: %v", err)
+	}
 }
 
 func hostnameOr(def string) string {

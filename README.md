@@ -2,30 +2,46 @@
 
 Headless local relay daemon for [pouch](https://pouch.pointegrity.com).
 
-Receives every drop from your pouch instance over HTTPS, persists it
-to a local SQLite database, and reports back periodically so the
-SaaS knows your archive is healthy. The point: a personal,
-self-controlled mirror of everything pouch holds for you, without
-trusting pouch's storage to be eternal.
+Connects to your pouch over a single outbound HTTPS link, receives
+every drop as it happens, and persists it to a local SQLite archive.
+The point: a personal, self-controlled mirror of everything pouch
+holds for you, without trusting pouch's storage to be eternal — and
+with no firewall opening, no port forwarding, no tunneling needed.
 
-## What it does
+## What it does (default: pull mode)
 
 ```
-[pouch SaaS] ── HTTPS POST /hook ──▶ [pouch-anchor] ──▶ /var/lib/pouch-anchor/drops.db
-     ▲                                       │
-     └──── HTTPS heartbeat every 30s ────────┘
-           "I have N drops, last id was X"
+[pouch SaaS]  ◀──── outbound HTTPS SSE stream ────  [pouch-anchor]  ──▶  drops.db
+              ◀──── outbound HTTPS heartbeat ─────
+                  every 30 s: "I have N drops"
 ```
 
-- **Receive** — webhook deliveries from pouch, signed with the HMAC
-  secret you minted at provisioning. Bad signature → 401, retried
-  delivery → silently deduped via `X-Pouch-Delivery`.
+**Both arrows go outward from your anchor box.** Pouch never tries to
+reach in. That means it works behind NAT, CGNAT, captive Wi-Fi,
+corporate proxies — anywhere outbound HTTPS works. Drop a binary on
+a Mac mini at home, fill in three values, you're done.
+
+- **Receive** — drops arrive over an SSE stream the anchor holds open
+  to pouch. Each event is HMAC-signed with the secret you minted at
+  provisioning; bad signature is rejected, replays are deduped.
 - **Persist** — one row per drop in a local SQLite DB. Pair with
-  [litestream](https://litestream.io) for offsite backup at
-  seconds-of-lag RPO.
-- **Heartbeat** — anchor reports back to pouch every 30 s with
-  `last_drop_id`, `total_drops`, `hostname`, and version. The pouch
-  SaaS uses this to populate its replication-status UI.
+  [litestream](https://litestream.io) for continuous offsite backup
+  at seconds-of-lag RPO.
+- **Heartbeat** — anchor reports `last_drop_id`, `total_drops`,
+  `hostname`, and version every 30 s; pouch's UI uses this to render
+  the replication-status panel.
+- **Reconnect-replay** — drops that pouch tried to deliver while the
+  anchor was offline are queued; on reconnect, pouch re-fires them
+  immediately so the archive catches up.
+
+## Push mode (advanced)
+
+If you happen to operate a publicly-reachable HTTPS endpoint (server
+with static IP and a real domain, cloudflared tunnel, tailscale
+funnel, nginx with Let's Encrypt), you can set `POUCH_PUBLIC_URL`
+and pouch will POST drops to that URL instead. Same wire format,
+same HMAC, same anchor binary — pull mode is just "no public URL,
+use the SSE stream." Most users will not need this.
 
 ## Provisioning (one-time)
 

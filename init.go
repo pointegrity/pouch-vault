@@ -65,32 +65,42 @@ func runInit(args []string) error {
 }
 
 // configStub returns the contents of a freshly-scaffolded anchor.env.
-// Comments mark each line as a TODO; the daemon refuses to start
-// until the placeholders are replaced.
+// Defaults to PULL mode (no public URL needed) — the path almost
+// every user wants. Push mode is left as a commented-out advanced
+// alternative.
 func configStub(dbPath string) string {
 	return `# pouch-anchor — user config.
 #
-# Values come from running` + " `pouch anchor create --owner <U> --name <N>` " + `
-# on your pouch server (see https://pouch.pointegrity.com/docs/anchors).
-# Uncomment and fill in the three REPLACE_ME values, then run pouch-anchor.
+# Get an anchor key + HMAC secret by running` + " `pouch anchor create --owner <U> --name <N>` " + `
+# on your pouch server, or asking your pouch admin (see
+# https://pouch.pointegrity.com/docs/anchors). Replace the two
+# REPLACE_ME values below, then run pouch-anchor.
 
 # Required.
 POUCH_URL=https://pouch.pointegrity.com
 POUCH_ANCHOR_KEY=REPLACE_ME
 POUCH_HMAC_SECRET=REPLACE_ME
 
-# Required for now: the URL pouch uses to reach this anchor over HTTP.
-# Will become optional in the next release once SSE pull lands —
-# anchors behind NAT will work without any tunneling.
-POUCH_PUBLIC_URL=https://anchor.example/hook
+# DEFAULT: pull mode. The anchor opens an outbound SSE connection
+# to pouch and drops are pushed down it as they happen. No public
+# URL, no port forwarding, no firewall holes. Works behind NAT,
+# CGNAT, corporate proxies — anywhere outbound HTTPS works.
+
+# ADVANCED: push mode. Uncomment POUCH_PUBLIC_URL only if you want
+# pouch to POST to a publicly-reachable URL you operate (with TLS,
+# DNS, and a firewall opening — typical of a server with a static
+# IP, or a tunnel like cloudflared / tailscale funnel / nginx).
+# Leave commented for the default pull mode.
+# POUCH_PUBLIC_URL=https://anchor.example/hook
 
 # Storage. Default is OS-conventional (XDG on Linux, Library on
 # macOS, AppData on Windows). Override here if you want it elsewhere.
 ANCHOR_DB=` + dbPath + `
 
-# Local listener — keep on loopback if you front it with a tunnel
-# (cloudflared / tailscale funnel). Bind to :7780 directly only if
-# this box is publicly reachable.
+# Local listener:
+#   pull mode: serves /healthz only (handy for systemd / docker
+#              healthchecks). Set to "off" to disable entirely.
+#   push mode: serves /hook (where pouch POSTs deliveries).
 ANCHOR_LISTEN=127.0.0.1:7780
 
 # Optional. Defaults to the OS hostname.
