@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>pouch-anchor — local viewer</title>
+  <title>pouch-vault — local viewer</title>
   <style>
     :root {
       --bg: #f7f7f5;
@@ -103,9 +103,9 @@
 <div class="wrap">
 
   <header>
-    <h1 id="anchor-name">pouch-anchor</h1>
+    <h1 id="vault-name">pouch-vault</h1>
     <span id="status-badge" class="badge unknown">…</span>
-    <span class="subtitle" id="anchor-mode"></span>
+    <span class="subtitle" id="vault-mode"></span>
   </header>
 
   <section class="stats" id="stats"></section>
@@ -124,13 +124,13 @@
 
   <footer>
     <p>
-      Read-only viewer of your local pouch-anchor archive. Anything mutating
+      Read-only viewer of your local pouch-vault archive. Anything mutating
       (delete, share, change settings, manage subscription) is in
       <a id="pouch-link" href="https://pouch.pointegrity.com/" target="_blank" rel="noopener">your pouch</a>
       where you're already logged in.
     </p>
     <p>
-      Local DB: <code id="db-path">…</code> · Anchor: <code id="anchor-id">…</code>
+      Local DB: <code id="db-path">…</code> · Vault: <code id="vault-id">…</code>
     </p>
   </footer>
 
@@ -155,15 +155,15 @@ async function loadStatus() {
   if (!r.ok) return;
   const s = await r.json();
 
-  document.getElementById('anchor-name').textContent = s.anchor_name || 'pouch-anchor';
-  document.getElementById('anchor-id').textContent = s.anchor_id || '(unregistered)';
+  document.getElementById('vault-name').textContent = s.vault_name || 'pouch-vault';
+  document.getElementById('vault-id').textContent = s.vault_id || '(unregistered)';
   document.getElementById('db-path').textContent = s.db_path || '';
-  document.getElementById('anchor-mode').textContent =
+  document.getElementById('vault-mode').textContent =
     `${s.mode}-mode · v${s.version} · host ${s.hostname}`;
   if (s.pouch_url) document.getElementById('pouch-link').href = s.pouch_url;
 
   // Health badge — based on heartbeat age (not stream state, since
-  // push-mode anchors have no stream and pull-mode reconnect gaps
+  // push-mode vaults have no stream and pull-mode reconnect gaps
   // are normal).
   const badge = document.getElementById('status-badge');
   if (!s.last_heartbeat_at) {

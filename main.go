@@ -13,12 +13,12 @@
 // Usage (env-var driven; all required):
 //
 //	POUCH_URL          https://pouch.pointegrity.com
-//	POUCH_ANCHOR_KEY   pk_...                    # from `pouch vault create`
+//	POUCH_VAULT_KEY   pk_...                    # from `pouch vault create`
 //	POUCH_HMAC_SECRET  abcdef...                 # from `pouch vault create`
 //	POUCH_PUBLIC_URL   https://vault.example/hook   # how pouch reaches us
-//	ANCHOR_DB          /var/lib/pouch-vault/drops.db
-//	ANCHOR_LISTEN      :7780
-//	ANCHOR_NAME        jy-laptop                 # optional; defaults to hostname
+//	VAULT_DB          /var/lib/pouch-vault/drops.db
+//	VAULT_LISTEN      :7780
+//	VAULT_NAME        jy-laptop                 # optional; defaults to hostname
 //
 // Built for systemd. See examples/pouch-vault.service.
 package main
@@ -54,11 +54,11 @@ type config struct {
 }
 
 func loadConfig() (*config, error) {
-	// Resolve --config / $POUCH_ANCHOR_CONFIG first so the file's
+	// Resolve --config / $POUCH_VAULT_CONFIG first so the file's
 	// values can seed env vars that aren't already set. Then the
 	// per-field reads below pick up either the env (already there)
 	// or the file (loaded into env).
-	cfgFile := os.Getenv("POUCH_ANCHOR_CONFIG")
+	cfgFile := os.Getenv("POUCH_VAULT_CONFIG")
 	flag.StringVar(&cfgFile, "config", cfgFile, "config file path (env-style KEY=VALUE)")
 	// We need the --config flag to be parsed before we read other
 	// flags / env, but flag.Parse() finalises the whole flag set.
@@ -79,7 +79,7 @@ func loadConfig() (*config, error) {
 	flag.Parse()
 
 	// Now load the config file, with the resolution order:
-	//   1. explicit --config / $POUCH_ANCHOR_CONFIG path
+	//   1. explicit --config / $POUCH_VAULT_CONFIG path
 	//   2. <user-config-dir>/pouch-vault/vault.env
 	//   3. /etc/pouch/vault.env
 	// loadEnvFile is no-op on missing files and never overrides
@@ -101,15 +101,15 @@ func loadConfig() (*config, error) {
 	// CLI flag wins; else env (now possibly seeded from a file);
 	// else built-in default.
 	pickStr(&c.pouchURL,   "POUCH_URL", "")
-	pickStr(&c.vaultKey,  "POUCH_ANCHOR_KEY", "")
+	pickStr(&c.vaultKey,  "POUCH_VAULT_KEY", "")
 	pickStr(&c.hmacSecret, "POUCH_HMAC_SECRET", "")
 	pickStr(&c.publicURL,  "POUCH_PUBLIC_URL", "")
 	if c.dbPath == "" {
 		// Use OS-conventional default if neither env nor flag set it.
 		if d, err := defaultDBPath(); err == nil {
-			c.dbPath = envOr("ANCHOR_DB", d)
+			c.dbPath = envOr("VAULT_DB", d)
 		} else {
-			c.dbPath = envOr("ANCHOR_DB", "drops.db")
+			c.dbPath = envOr("VAULT_DB", "drops.db")
 		}
 	}
 	if c.blobsDir == "" {
@@ -117,13 +117,13 @@ func loadConfig() (*config, error) {
 		// SQLite file lives in the OS data dir; blobs go right beside
 		// so backups capture both at once.
 		if d, err := dataDir(); err == nil {
-			c.blobsDir = envOr("ANCHOR_BLOBS", filepath.Join(d, "blobs"))
+			c.blobsDir = envOr("VAULT_BLOBS", filepath.Join(d, "blobs"))
 		} else {
-			c.blobsDir = envOr("ANCHOR_BLOBS", "blobs")
+			c.blobsDir = envOr("VAULT_BLOBS", "blobs")
 		}
 	}
-	pickStr(&c.listenAddr, "ANCHOR_LISTEN", ":7780")
-	pickStr(&c.name,       "ANCHOR_NAME", "")
+	pickStr(&c.listenAddr, "VAULT_LISTEN", ":7780")
+	pickStr(&c.name,       "VAULT_NAME", "")
 
 	if c.name == "" {
 		if h, err := os.Hostname(); err == nil {
@@ -139,7 +139,7 @@ func loadConfig() (*config, error) {
 		val, name string
 	}{
 		{c.pouchURL, "POUCH_URL"},
-		{c.vaultKey, "POUCH_ANCHOR_KEY"},
+		{c.vaultKey, "POUCH_VAULT_KEY"},
 		{c.hmacSecret, "POUCH_HMAC_SECRET"},
 	} {
 		if m.val == "" {
@@ -147,7 +147,7 @@ func loadConfig() (*config, error) {
 		}
 	}
 	// POUCH_PUBLIC_URL is now OPTIONAL: set → push mode (we listen
-	// on ANCHOR_LISTEN for /hook deliveries from pouch). Unset →
+	// on VAULT_LISTEN for /hook deliveries from pouch). Unset →
 	// pull mode (we hold an SSE connection open to pouch). Pull
 	// mode is the default and what most users want — no public URL,
 	// no tunneling, no firewall holes.
@@ -210,7 +210,7 @@ Usage:
 
 Required (both modes):
   POUCH_URL          --pouch-url     pouch SaaS base URL
-  POUCH_ANCHOR_KEY   --vault-key    vault API key
+  POUCH_VAULT_KEY   --vault-key    vault API key
   POUCH_HMAC_SECRET  --hmac-secret   delivery signature secret
 
 Optional:
@@ -219,15 +219,15 @@ Optional:
                                      SSE connection to pouch. Pull mode needs no
                                      publicly-reachable endpoint, no firewall hole,
                                      no tunneling. Recommended for most users.
-  ANCHOR_DB          --db            sqlite database path
-  ANCHOR_LISTEN      --addr          local listener (push mode: receives /hook;
+  VAULT_DB          --db            sqlite database path
+  VAULT_LISTEN      --addr          local listener (push mode: receives /hook;
                                      pull mode: just /healthz; "off" disables)
-  ANCHOR_NAME        --name          vault name (defaults to hostname)
+  VAULT_NAME        --name          vault name (defaults to hostname)
                      --heartbeat     heartbeat interval (default 30s)
                      --config        explicit config file path
 
 The daemon also reads an env-style config file. Lookup order:
-  1. --config <path> / $POUCH_ANCHOR_CONFIG
+  1. --config <path> / $POUCH_VAULT_CONFIG
   2. <user-config-dir>/pouch-vault/vault.env
        (Linux: ~/.config; macOS: ~/Library/Application Support; Windows: %AppData%)
   3. /etc/pouch/vault.env (system-wide)
@@ -295,8 +295,8 @@ func run() error {
 
 	if mode == "pull" {
 		// Pull mode: no inbound /hook needed. Still useful to serve
-		// /healthz + the local UI on ANCHOR_LISTEN. Skip if the user
-		// explicitly set ANCHOR_LISTEN=off.
+		// /healthz + the local UI on VAULT_LISTEN. Skip if the user
+		// explicitly set VAULT_LISTEN=off.
 		if cfg.listenAddr != "" && cfg.listenAddr != "off" {
 			go runLocalListener(ctx, cfg.listenAddr, store, cfg.blobsDir)
 		}

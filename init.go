@@ -57,7 +57,7 @@ func runInit(args []string) error {
 	fmt.Fprintf(os.Stderr, "  database     %s\n", dbPath)
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Next:")
-	fmt.Fprintf(os.Stderr, "  1. Get an vault key + secret from your pouch admin\n")
+	fmt.Fprintf(os.Stderr, "  1. Get a vault key + secret from your pouch admin\n")
 	fmt.Fprintf(os.Stderr, "     (`pouch vault create --owner <you> --name <a-name>` on the server)\n")
 	fmt.Fprintf(os.Stderr, "  2. Edit %s and fill in the values\n", cfgPath)
 	fmt.Fprintf(os.Stderr, "  3. Run `pouch-vault` (no subcommand) — it'll pick up the config automatically\n")
@@ -71,14 +71,14 @@ func runInit(args []string) error {
 func configStub(dbPath string) string {
 	return `# pouch-vault — user config.
 #
-# Get an vault key + HMAC secret by running` + " `pouch vault create --owner <U> --name <N>` " + `
+# Get a vault key + HMAC secret by running` + " `pouch vault create --owner <U> --name <N>` " + `
 # on your pouch server, or asking your pouch admin (see
 # https://pouch.pointegrity.com/docs/vaults). Replace the two
 # REPLACE_ME values below, then run pouch-vault.
 
 # Required.
 POUCH_URL=https://pouch.pointegrity.com
-POUCH_ANCHOR_KEY=REPLACE_ME
+POUCH_VAULT_KEY=REPLACE_ME
 POUCH_HMAC_SECRET=REPLACE_ME
 
 # DEFAULT: pull mode. The vault opens an outbound SSE connection
@@ -95,16 +95,16 @@ POUCH_HMAC_SECRET=REPLACE_ME
 
 # Storage. Default is OS-conventional (XDG on Linux, Library on
 # macOS, AppData on Windows). Override here if you want it elsewhere.
-ANCHOR_DB=` + dbPath + `
+VAULT_DB=` + dbPath + `
 
 # Local listener:
 #   pull mode: serves /healthz only (handy for systemd / docker
 #              healthchecks). Set to "off" to disable entirely.
 #   push mode: serves /hook (where pouch POSTs deliveries).
-ANCHOR_LISTEN=127.0.0.1:7780
+VAULT_LISTEN=127.0.0.1:7780
 
 # Optional. Defaults to the OS hostname.
-# ANCHOR_NAME=
+# VAULT_NAME=
 `
 }
 

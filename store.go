@@ -73,7 +73,7 @@ ALTER TABLE drops ADD COLUMN body_blob_path TEXT;
 ALTER TABLE drops ADD COLUMN body_size INTEGER NOT NULL DEFAULT 0;
 `
 
-// OpenStore creates / opens an vault's local DB. _journal=WAL keeps
+// OpenStore creates / opens a vault's local DB. _journal=WAL keeps
 // reads non-blocking while the receiver writes; _busy_timeout buys
 // a few seconds of automatic retry on transient lock contention.
 func OpenStore(path string) (*Store, error) {

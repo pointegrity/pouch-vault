@@ -77,7 +77,7 @@ vault host:
 
 ```
 POUCH_URL          https://pouch.pointegrity.com
-POUCH_ANCHOR_KEY   pk_...                        (auth, long-lived)
+POUCH_VAULT_KEY   pk_...                        (auth, long-lived)
 POUCH_HMAC_SECRET  ...                           (delivery signature)
 ```
 
@@ -138,7 +138,7 @@ it picks up the file automatically.
 
 The daemon's config-file lookup chain:
 
-1. `--config <path>` flag, or `$POUCH_ANCHOR_CONFIG`
+1. `--config <path>` flag, or `$POUCH_VAULT_CONFIG`
 2. `<user-config-dir>/pouch-vault/vault.env` (the `init`-scaffolded path)
 3. `/etc/pouch/vault.env` (system-wide, useful for systemd)
 
@@ -157,10 +157,10 @@ for a few hours":
 
 ```bash
 POUCH_URL=https://pouch.pointegrity.com \
-POUCH_ANCHOR_KEY=pk_... \
+POUCH_VAULT_KEY=pk_... \
 POUCH_HMAC_SECRET=... \
 POUCH_PUBLIC_URL=https://vault.example/hook \
-ANCHOR_DB=./drops.db \
+VAULT_DB=./drops.db \
 pouch-vault
 ```
 
@@ -194,7 +194,7 @@ docker run -d --name pouch-vault \
   -p 7780:7780 \
   -v pouch-vault-data:/data \
   -e POUCH_URL=https://pouch.pointegrity.com \
-  -e POUCH_ANCHOR_KEY=pk_... \
+  -e POUCH_VAULT_KEY=pk_... \
   -e POUCH_HMAC_SECRET=... \
   -e POUCH_PUBLIC_URL=https://vault.example/hook \
   ghcr.io/pointegrity/pouch-vault:latest
@@ -259,18 +259,18 @@ on the receiver side. See pouch issue tracker.
 | env / flag | meaning | default |
 |---|---|---|
 | `POUCH_URL` / `--pouch-url` | pouch SaaS base URL | (required) |
-| `POUCH_ANCHOR_KEY` / `--vault-key` | API key from `pouch vault create` | (required) |
+| `POUCH_VAULT_KEY` / `--vault-key` | API key from `pouch vault create` | (required) |
 | `POUCH_HMAC_SECRET` / `--hmac-secret` | delivery signature secret | (required) |
 | `POUCH_PUBLIC_URL` / `--public-url` | where pouch reaches us | (required) |
-| `ANCHOR_DB` / `--db` | sqlite database path | `drops.db` |
-| `ANCHOR_LISTEN` / `--addr` | listen address | `:7780` |
-| `ANCHOR_NAME` / `--name` | vault name (heartbeat label) | `$HOSTNAME` |
+| `VAULT_DB` / `--db` | sqlite database path | `drops.db` |
+| `VAULT_LISTEN` / `--addr` | listen address | `:7780` |
+| `VAULT_NAME` / `--name` | vault name (heartbeat label) | `$HOSTNAME` |
 | `--heartbeat` | heartbeat interval | `30s` |
 
 CLI flags override env. Useful for local dev:
 
 ```bash
-POUCH_ANCHOR_KEY=pk_xxx \
+POUCH_VAULT_KEY=pk_xxx \
 POUCH_HMAC_SECRET=abc \
 go run . -pouch-url http://localhost:8080 -public-url http://127.0.0.1:7780/hook -addr :7780
 ```

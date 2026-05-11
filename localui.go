@@ -1,7 +1,7 @@
 // Local UI: a tiny localhost-only viewer for the vault's status
 // and the contents of its archive.
 //
-// Bound to whatever ANCHOR_LISTEN serves (default 127.0.0.1:7780).
+// Bound to whatever VAULT_LISTEN serves (default 127.0.0.1:7780).
 // No auth: it's localhost. Read-only: no delete, no share, no put.
 // Anything mutating, the user does in their pouch SaaS where they're
 // already logged in.
