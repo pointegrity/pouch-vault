@@ -41,7 +41,7 @@ func loadCLIConfig(explicit string) (*CLIConfig, error) {
 }
 
 // configDir returns the user-level config dir for the pouch CLI.
-// Distinct from the anchor's dir — the CLI is its own thing.
+// Distinct from the vault's dir — the CLI is its own thing.
 //
 //	Linux:   $XDG_CONFIG_HOME/pouch or ~/.config/pouch
 //	macOS:   ~/Library/Application Support/pouch

@@ -6,14 +6,14 @@ import (
 	"runtime"
 )
 
-// configDir returns the user-level config directory for pouch-anchor,
+// configDir returns the user-level config directory for pouch-vault,
 // per OS convention:
 //
-//	Linux:   $XDG_CONFIG_HOME/pouch-anchor or ~/.config/pouch-anchor
-//	macOS:   ~/Library/Application Support/pouch-anchor
-//	Windows: %AppData%\pouch-anchor
+//	Linux:   $XDG_CONFIG_HOME/pouch-vault or ~/.config/pouch-vault
+//	macOS:   ~/Library/Application Support/pouch-vault
+//	Windows: %AppData%\pouch-vault
 //
-// Falls back to ~/.pouch-anchor if the OS lookup fails (which only
+// Falls back to ~/.pouch-vault if the OS lookup fails (which only
 // happens with truly broken environments — no $HOME etc).
 func configDir() (string, error) {
 	base, err := os.UserConfigDir()
@@ -22,9 +22,9 @@ func configDir() (string, error) {
 		if herr != nil {
 			return "", err
 		}
-		return filepath.Join(home, ".pouch-anchor"), nil
+		return filepath.Join(home, ".pouch-vault"), nil
 	}
-	return filepath.Join(base, "pouch-anchor"), nil
+	return filepath.Join(base, "pouch-vault"), nil
 }
 
 // dataDir returns the user-level data directory — distinct from
@@ -32,19 +32,19 @@ func configDir() (string, error) {
 // Windows because those OSes don't have the distinction. The DB
 // goes here.
 //
-//	Linux:   $XDG_DATA_HOME/pouch-anchor or ~/.local/share/pouch-anchor
-//	macOS:   ~/Library/Application Support/pouch-anchor
-//	Windows: %AppData%\pouch-anchor
+//	Linux:   $XDG_DATA_HOME/pouch-vault or ~/.local/share/pouch-vault
+//	macOS:   ~/Library/Application Support/pouch-vault
+//	Windows: %AppData%\pouch-vault
 func dataDir() (string, error) {
 	if runtime.GOOS == "linux" {
 		if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-			return filepath.Join(d, "pouch-anchor"), nil
+			return filepath.Join(d, "pouch-vault"), nil
 		}
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
 		}
-		return filepath.Join(home, ".local", "share", "pouch-anchor"), nil
+		return filepath.Join(home, ".local", "share", "pouch-vault"), nil
 	}
 	// macOS + Windows reuse the config dir for app data.
 	return configDir()
@@ -56,7 +56,7 @@ func configPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(d, "anchor.env"), nil
+	return filepath.Join(d, "vault.env"), nil
 }
 
 // defaultDBPath returns the canonical database path inside dataDir.

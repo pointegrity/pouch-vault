@@ -16,8 +16,8 @@
 // run on the pouch server. The plaintext key is shown ONCE; paste it
 // into your config.
 //
-// The companion daemon for receiving drops (anchor) lives in this
-// same repo as `pouch-anchor`. Same provisioning model, complementary
+// The companion daemon for receiving drops (vault) lives in this
+// same repo as `pouch-vault`. Same provisioning model, complementary
 // direction.
 package main
 

@@ -14,8 +14,8 @@ import (
 // so the UI handler reads them without locking.
 type Status struct {
 	// Set once at startup, read forever.
-	AnchorName string
-	AnchorID   string
+	VaultName string
+	VaultID   string
 	Version    string
 	Mode       string // "pull" or "push"
 	Hostname   string

@@ -7,14 +7,14 @@ import (
 	"path/filepath"
 )
 
-// runInit is `pouch-anchor init` — sets up the OS-conventional
-// config + data directories, drops a stub anchor.env config the
+// runInit is `pouch-vault init` — sets up the OS-conventional
+// config + data directories, drops a stub vault.env config the
 // user can edit, and tells them what to do next. Idempotent: if
 // the dirs / file already exist it leaves them alone (so re-running
 // after a partial install is safe).
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	force := fs.Bool("force", false, "overwrite anchor.env if it already exists")
+	force := fs.Bool("force", false, "overwrite vault.env if it already exists")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -27,7 +27,7 @@ func runInit(args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve data dir: %w", err)
 	}
-	cfgPath := filepath.Join(cfgDir, "anchor.env")
+	cfgPath := filepath.Join(cfgDir, "vault.env")
 	dbPath := filepath.Join(dataDir, "drops.db")
 
 	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
@@ -49,7 +49,7 @@ func runInit(args []string) error {
 		wroteConfig = true
 	}
 
-	fmt.Fprintln(os.Stderr, "pouch-anchor: scaffolded user-level install.")
+	fmt.Fprintln(os.Stderr, "pouch-vault: scaffolded user-level install.")
 	fmt.Fprintf(os.Stderr, "  config dir   %s\n", cfgDir)
 	fmt.Fprintf(os.Stderr, "  data dir     %s\n", dataDir)
 	fmt.Fprintf(os.Stderr, "  config file  %s%s\n", cfgPath,
@@ -57,31 +57,31 @@ func runInit(args []string) error {
 	fmt.Fprintf(os.Stderr, "  database     %s\n", dbPath)
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Next:")
-	fmt.Fprintf(os.Stderr, "  1. Get an anchor key + secret from your pouch admin\n")
-	fmt.Fprintf(os.Stderr, "     (`pouch anchor create --owner <you> --name <a-name>` on the server)\n")
+	fmt.Fprintf(os.Stderr, "  1. Get an vault key + secret from your pouch admin\n")
+	fmt.Fprintf(os.Stderr, "     (`pouch vault create --owner <you> --name <a-name>` on the server)\n")
 	fmt.Fprintf(os.Stderr, "  2. Edit %s and fill in the values\n", cfgPath)
-	fmt.Fprintf(os.Stderr, "  3. Run `pouch-anchor` (no subcommand) — it'll pick up the config automatically\n")
+	fmt.Fprintf(os.Stderr, "  3. Run `pouch-vault` (no subcommand) — it'll pick up the config automatically\n")
 	return nil
 }
 
-// configStub returns the contents of a freshly-scaffolded anchor.env.
+// configStub returns the contents of a freshly-scaffolded vault.env.
 // Defaults to PULL mode (no public URL needed) — the path almost
 // every user wants. Push mode is left as a commented-out advanced
 // alternative.
 func configStub(dbPath string) string {
-	return `# pouch-anchor — user config.
+	return `# pouch-vault — user config.
 #
-# Get an anchor key + HMAC secret by running` + " `pouch anchor create --owner <U> --name <N>` " + `
+# Get an vault key + HMAC secret by running` + " `pouch vault create --owner <U> --name <N>` " + `
 # on your pouch server, or asking your pouch admin (see
-# https://pouch.pointegrity.com/docs/anchors). Replace the two
-# REPLACE_ME values below, then run pouch-anchor.
+# https://pouch.pointegrity.com/docs/vaults). Replace the two
+# REPLACE_ME values below, then run pouch-vault.
 
 # Required.
 POUCH_URL=https://pouch.pointegrity.com
 POUCH_ANCHOR_KEY=REPLACE_ME
 POUCH_HMAC_SECRET=REPLACE_ME
 
-# DEFAULT: pull mode. The anchor opens an outbound SSE connection
+# DEFAULT: pull mode. The vault opens an outbound SSE connection
 # to pouch and drops are pushed down it as they happen. No public
 # URL, no port forwarding, no firewall holes. Works behind NAT,
 # CGNAT, corporate proxies — anywhere outbound HTTPS works.
@@ -91,7 +91,7 @@ POUCH_HMAC_SECRET=REPLACE_ME
 # DNS, and a firewall opening — typical of a server with a static
 # IP, or a tunnel like cloudflared / tailscale funnel / nginx).
 # Leave commented for the default pull mode.
-# POUCH_PUBLIC_URL=https://anchor.example/hook
+# POUCH_PUBLIC_URL=https://vault.example/hook
 
 # Storage. Default is OS-conventional (XDG on Linux, Library on
 # macOS, AppData on Windows). Override here if you want it elsewhere.

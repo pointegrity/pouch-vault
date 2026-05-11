@@ -1,12 +1,12 @@
 GOFLAGS ?=
 
-.PHONY: build build-anchor build-cli install test tidy clean
+.PHONY: build build-vault build-cli install test tidy clean
 
 # Both binaries by default.
-build: build-anchor build-cli
+build: build-vault build-cli
 
-build-anchor:
-	go build $(GOFLAGS) -o ./build/pouch-anchor .
+build-vault:
+	go build $(GOFLAGS) -o ./build/pouch-vault .
 
 build-cli:
 	go build $(GOFLAGS) -o ./build/pouch ./cmd/pouch

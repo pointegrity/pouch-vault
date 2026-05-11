@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// runHeartbeats reports the anchor's local stats to pouch every
+// runHeartbeats reports the vault's local stats to pouch every
 // `interval`. Returns when ctx is cancelled. First tick fires
 // immediately so the dashboard updates without waiting an interval.
 func runHeartbeats(ctx context.Context, client *PouchClient, store *Store, interval time.Duration) {

@@ -13,7 +13,7 @@ import (
 )
 
 // runStream is the pull-mode loop: keep an SSE connection open to
-// /api/anchor/stream and dispatch each incoming drop.created event
+// /api/vaults/stream and dispatch each incoming drop.created event
 // to the local store.
 //
 // Reconnects with backoff on disconnect: 2s, 4s, 8s, 16s, capped at
@@ -57,13 +57,13 @@ func runStream(ctx context.Context, client *PouchClient, store *Store, hmacSecre
 // reason the connection ended; nil for a clean server-side close.
 func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecret, blobsDir string, dedup *dedupRing) error {
 	req, err := http.NewRequestWithContext(ctx, "GET",
-		client.BaseURL+"/api/anchor/stream", nil)
+		client.BaseURL+"/api/vaults/stream", nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("X-Anchor-Key", client.APIKey)
+	req.Header.Set("X-Vault-Key", client.APIKey)
 	req.Header.Set("User-Agent", client.UserAgent)
 
 	// SSE = long-lived response; the client must NOT impose a
@@ -80,7 +80,7 @@ func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecr
 		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("stream %d: %s", resp.StatusCode, strings.TrimSpace(string(buf)))
 	}
-	log.Printf("stream: connected to %s/api/anchor/stream", client.BaseURL)
+	log.Printf("stream: connected to %s/api/vaults/stream", client.BaseURL)
 	status.MarkConnected()
 	defer status.MarkDisconnected("loop ended")
 

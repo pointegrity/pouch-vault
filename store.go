@@ -65,7 +65,7 @@ CREATE INDEX IF NOT EXISTS idx_drops_us     ON drops(pouch_user, stream, receive
 `
 
 // migrateSchema applies idempotent ALTER TABLEs for upgrades from
-// older anchor builds. New columns added since v0.5.0 land here.
+// older vault builds. New columns added since v0.5.0 land here.
 const migrateSQL = `
 ALTER TABLE drops ADD COLUMN body_encoding TEXT NOT NULL DEFAULT 'utf8';
 ALTER TABLE drops ADD COLUMN body_sha256 TEXT;
@@ -73,7 +73,7 @@ ALTER TABLE drops ADD COLUMN body_blob_path TEXT;
 ALTER TABLE drops ADD COLUMN body_size INTEGER NOT NULL DEFAULT 0;
 `
 
-// OpenStore creates / opens an anchor's local DB. _journal=WAL keeps
+// OpenStore creates / opens an vault's local DB. _journal=WAL keeps
 // reads non-blocking while the receiver writes; _busy_timeout buys
 // a few seconds of automatic retry on transient lock contention.
 func OpenStore(path string) (*Store, error) {

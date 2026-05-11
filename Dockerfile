@@ -6,13 +6,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o /out/pouch-anchor .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o /out/pouch-vault .
 
 FROM scratch
-# tini-style init isn't needed: pouch-anchor's main goroutine handles
+# tini-style init isn't needed: pouch-vault's main goroutine handles
 # SIGTERM directly. CA certs needed for HTTPS to pouch.
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=build /out/pouch-anchor /pouch-anchor
+COPY --from=build /out/pouch-vault /pouch-vault
 
 # Persist the SQLite DB across container restarts.
 VOLUME ["/data"]
@@ -20,4 +20,4 @@ ENV ANCHOR_DB=/data/drops.db
 ENV ANCHOR_LISTEN=:7780
 EXPOSE 7780
 
-ENTRYPOINT ["/pouch-anchor"]
+ENTRYPOINT ["/pouch-vault"]

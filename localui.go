@@ -1,4 +1,4 @@
-// Local UI: a tiny localhost-only viewer for the anchor's status
+// Local UI: a tiny localhost-only viewer for the vault's status
 // and the contents of its archive.
 //
 // Bound to whatever ANCHOR_LISTEN serves (default 127.0.0.1:7780).
@@ -8,7 +8,7 @@
 //
 // Routes:
 //   GET /ui                    — single-file HTML page (vanilla JS)
-//   GET /api/local/status      — anchor's runtime status (JSON)
+//   GET /api/local/status      — vault's runtime status (JSON)
 //   GET /api/local/drops       — recent drops, optional ?q=, ?limit=
 //   GET /api/local/drops/{id}  — one drop's full record + body
 package main
@@ -47,8 +47,8 @@ func mountLocalUI(mux *http.ServeMux, st *Store, blobsDir string) {
 			return
 		}
 		out := map[string]any{
-			"anchor_name": status.AnchorName,
-			"anchor_id":   status.AnchorID,
+			"vault_name": status.VaultName,
+			"vault_id":   status.VaultID,
 			"version":     status.Version,
 			"mode":        status.Mode,
 			"hostname":    status.Hostname,

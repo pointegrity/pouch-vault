@@ -11,14 +11,14 @@ import (
 	"time"
 )
 
-// PouchClient is the outbound side: anchor → pouch.
+// PouchClient is the outbound side: vault → pouch.
 //
 // Only two endpoints today (register, heartbeat). Auth is the
-// long-lived API key minted by `pouch anchor create`, sent in
-// the X-Anchor-Key header.
+// long-lived API key minted by `pouch vault create`, sent in
+// the X-Vault-Key header.
 type PouchClient struct {
 	BaseURL    string        // e.g. "https://pouch.pointegrity.com"
-	APIKey     string        // pk_... from `pouch anchor create`
+	APIKey     string        // pk_... from `pouch vault create`
 	HTTPClient *http.Client  // nil → default with 10s timeout
 	UserAgent  string
 }
@@ -29,25 +29,25 @@ func NewPouchClient(baseURL, apiKey string) *PouchClient {
 		BaseURL:    strings.TrimRight(baseURL, "/"),
 		APIKey:     apiKey,
 		HTTPClient: &http.Client{Timeout: 10 * time.Second},
-		UserAgent:  "pouch-anchor/0.1.0",
+		UserAgent:  "pouch-vault/0.1.0",
 	}
 }
 
 // Register tells pouch our public URL + identity. Idempotent; called
-// on every anchor boot before the heartbeat loop starts.
-func (c *PouchClient) Register(ctx context.Context, publicURL, hostname, version string) (anchorID string, err error) {
+// on every vault boot before the heartbeat loop starts.
+func (c *PouchClient) Register(ctx context.Context, publicURL, hostname, version string) (vaultID string, err error) {
 	in := map[string]any{
 		"public_url": publicURL,
 		"hostname":   hostname,
 		"version":    version,
 	}
 	out := struct {
-		AnchorID string `json:"anchor_id"`
+		VaultID string `json:"vault_id"`
 	}{}
-	if err := c.post(ctx, "/api/anchor/register", in, &out); err != nil {
+	if err := c.post(ctx, "/api/vaults/register", in, &out); err != nil {
 		return "", err
 	}
-	return out.AnchorID, nil
+	return out.VaultID, nil
 }
 
 // Heartbeat reports last-drop / total-drops to pouch. Returns the
@@ -57,7 +57,7 @@ func (c *PouchClient) Heartbeat(ctx context.Context, lastDropID string, totalDro
 		"last_drop_id": lastDropID,
 		"total_drops":  totalDrops,
 	}
-	return c.post(ctx, "/api/anchor/heartbeat", in, nil)
+	return c.post(ctx, "/api/vaults/heartbeat", in, nil)
 }
 
 // post is the shared codepath. Marshal, set headers, send, decode
@@ -74,7 +74,7 @@ func (c *PouchClient) post(ctx context.Context, path string, in, out any) error 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", c.UserAgent)
-	req.Header.Set("X-Anchor-Key", c.APIKey)
+	req.Header.Set("X-Vault-Key", c.APIKey)
 
 	cli := c.HTTPClient
 	if cli == nil {

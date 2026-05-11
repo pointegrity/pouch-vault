@@ -1,8 +1,8 @@
-# pouch-anchor (and pouch CLI)
+# pouch-vault (and pouch CLI)
 
 This repo ships **two** binaries that complement each other:
 
-- `pouch-anchor` — local relay daemon. Receives every drop from your
+- `pouch-vault` — local relay daemon. Receives every drop from your
   pouch over a single outbound HTTPS connection and mirrors it to a
   local SQLite archive. (See "What it does" below.)
 - `pouch` — minimal client CLI. Send drops *to* your pouch from a
@@ -27,27 +27,27 @@ with no firewall opening, no port forwarding, no tunneling needed.
 ## What it does (default: pull mode)
 
 ```
-[pouch SaaS]  ◀──── outbound HTTPS SSE stream ────  [pouch-anchor]  ──▶  drops.db
+[pouch SaaS]  ◀──── outbound HTTPS SSE stream ────  [pouch-vault]  ──▶  drops.db
               ◀──── outbound HTTPS heartbeat ─────
                   every 30 s: "I have N drops"
 ```
 
-**Both arrows go outward from your anchor box.** Pouch never tries to
+**Both arrows go outward from your vault box.** Pouch never tries to
 reach in. That means it works behind NAT, CGNAT, captive Wi-Fi,
 corporate proxies — anywhere outbound HTTPS works. Drop a binary on
 a Mac mini at home, fill in three values, you're done.
 
-- **Receive** — drops arrive over an SSE stream the anchor holds open
+- **Receive** — drops arrive over an SSE stream the vault holds open
   to pouch. Each event is HMAC-signed with the secret you minted at
   provisioning; bad signature is rejected, replays are deduped.
 - **Persist** — one row per drop in a local SQLite DB. Pair with
   [litestream](https://litestream.io) for continuous offsite backup
   at seconds-of-lag RPO.
-- **Heartbeat** — anchor reports `last_drop_id`, `total_drops`,
+- **Heartbeat** — vault reports `last_drop_id`, `total_drops`,
   `hostname`, and version every 30 s; pouch's UI uses this to render
   the replication-status panel.
 - **Reconnect-replay** — drops that pouch tried to deliver while the
-  anchor was offline are queued; on reconnect, pouch re-fires them
+  vault was offline are queued; on reconnect, pouch re-fires them
   immediately so the archive catches up.
 - **Local viewer** at `http://localhost:7780/ui` — a tiny read-only
   HTML page showing status, recent drops, search, and inline body
@@ -61,7 +61,7 @@ If you happen to operate a publicly-reachable HTTPS endpoint (server
 with static IP and a real domain, cloudflared tunnel, tailscale
 funnel, nginx with Let's Encrypt), you can set `POUCH_PUBLIC_URL`
 and pouch will POST drops to that URL instead. Same wire format,
-same HMAC, same anchor binary — pull mode is just "no public URL,
+same HMAC, same vault binary — pull mode is just "no public URL,
 use the SSE stream." Most users will not need this.
 
 ## Provisioning (one-time)
@@ -69,11 +69,11 @@ use the SSE stream." Most users will not need this.
 On the **pouch server** (admin shell):
 
 ```bash
-pouch anchor create --owner <user-id> --name <anchor-name>
+pouch vault create --owner <user-id> --name <vault-name>
 ```
 
 Output is shown **once**. Save the three values you'll need on the
-anchor host:
+vault host:
 
 ```
 POUCH_URL          https://pouch.pointegrity.com
@@ -85,7 +85,7 @@ POUCH_HMAC_SECRET  ...                           (delivery signature)
 
 Pre-built binaries for **linux/amd64**, **linux/arm64**, **darwin/amd64**,
 **darwin/arm64**, and **windows/amd64** are attached to every
-[GitHub release](https://github.com/pointegrity/pouch-anchor/releases).
+[GitHub release](https://github.com/pointegrity/pouch-vault/releases).
 A Docker image is published as part of the same release flow.
 
 The binary is **pure Go** (modernc/sqlite) — no CGO, no glibc/musl
@@ -94,33 +94,33 @@ worries, statically linked. Copy it onto the box and run.
 ### macOS (Apple Silicon)
 
 ```bash
-curl -fL -o pouch-anchor https://github.com/pointegrity/pouch-anchor/releases/latest/download/pouch-anchor-darwin-arm64
-chmod +x pouch-anchor
-sudo mv pouch-anchor /usr/local/bin/
+curl -fL -o pouch-vault https://github.com/pointegrity/pouch-vault/releases/latest/download/pouch-vault-darwin-arm64
+chmod +x pouch-vault
+sudo mv pouch-vault /usr/local/bin/
 ```
 
 ### Linux (amd64)
 
 ```bash
-curl -fL -o pouch-anchor https://github.com/pointegrity/pouch-anchor/releases/latest/download/pouch-anchor-linux-amd64
-chmod +x pouch-anchor
-sudo install -m 755 pouch-anchor /usr/local/bin/
+curl -fL -o pouch-vault https://github.com/pointegrity/pouch-vault/releases/latest/download/pouch-vault-linux-amd64
+chmod +x pouch-vault
+sudo install -m 755 pouch-vault /usr/local/bin/
 ```
 
 ### From source (any platform with Go 1.22+)
 
 ```bash
-git clone https://github.com/pointegrity/pouch-anchor
-cd pouch-anchor
-go build -o pouch-anchor .
+git clone https://github.com/pointegrity/pouch-vault
+cd pouch-vault
+go build -o pouch-vault .
 ```
 
 ### One-time scaffold (recommended)
 
-After installing the binary, on each anchor host run:
+After installing the binary, on each vault host run:
 
 ```bash
-pouch-anchor init
+pouch-vault init
 ```
 
 This creates the OS-conventional config + data directories and drops
@@ -128,19 +128,19 @@ a stub config you fill in:
 
 | OS | config file | database |
 |---|---|---|
-| Linux | `~/.config/pouch-anchor/anchor.env` | `~/.local/share/pouch-anchor/drops.db` |
-| macOS | `~/Library/Application Support/pouch-anchor/anchor.env` | (same dir)/drops.db |
-| Windows | `%AppData%\pouch-anchor\anchor.env` | (same dir)\drops.db |
+| Linux | `~/.config/pouch-vault/vault.env` | `~/.local/share/pouch-vault/drops.db` |
+| macOS | `~/Library/Application Support/pouch-vault/vault.env` | (same dir)/drops.db |
+| Windows | `%AppData%\pouch-vault\vault.env` | (same dir)\drops.db |
 
-Then edit the config file with the values from `pouch anchor create`
-(see Provisioning above) and run `pouch-anchor` — no env vars needed,
+Then edit the config file with the values from `pouch vault create`
+(see Provisioning above) and run `pouch-vault` — no env vars needed,
 it picks up the file automatically.
 
 The daemon's config-file lookup chain:
 
 1. `--config <path>` flag, or `$POUCH_ANCHOR_CONFIG`
-2. `<user-config-dir>/pouch-anchor/anchor.env` (the `init`-scaffolded path)
-3. `/etc/pouch/anchor.env` (system-wide, useful for systemd)
+2. `<user-config-dir>/pouch-vault/vault.env` (the `init`-scaffolded path)
+3. `/etc/pouch/vault.env` (system-wide, useful for systemd)
 
 File values fill any env var **not already set** — so explicit env
 or CLI flags always win.
@@ -159,59 +159,59 @@ for a few hours":
 POUCH_URL=https://pouch.pointegrity.com \
 POUCH_ANCHOR_KEY=pk_... \
 POUCH_HMAC_SECRET=... \
-POUCH_PUBLIC_URL=https://anchor.example/hook \
+POUCH_PUBLIC_URL=https://vault.example/hook \
 ANCHOR_DB=./drops.db \
-pouch-anchor
+pouch-vault
 ```
 
 ### systemd (Linux servers, Pi, NAS)
 
 ```bash
 sudo install -d -m 700 -o pouch:pouch /etc/pouch
-sudo install -m 600 -o pouch:pouch examples/pouch-anchor.env /etc/pouch/anchor.env
-$EDITOR /etc/pouch/anchor.env
-sudo install -d -m 755 -o pouch:pouch /var/lib/pouch-anchor
+sudo install -m 600 -o pouch:pouch examples/pouch-vault.env /etc/pouch/vault.env
+$EDITOR /etc/pouch/vault.env
+sudo install -d -m 755 -o pouch:pouch /var/lib/pouch-vault
 
-sudo install -m 644 examples/pouch-anchor.service /etc/systemd/system/
+sudo install -m 644 examples/pouch-vault.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now pouch-anchor
-sudo journalctl -u pouch-anchor -f
+sudo systemctl enable --now pouch-vault
+sudo journalctl -u pouch-vault -f
 ```
 
 ### launchd (macOS, always-on Mac)
 
 ```bash
-cp examples/com.pointegrity.pouch-anchor.plist ~/Library/LaunchAgents/
-$EDITOR ~/Library/LaunchAgents/com.pointegrity.pouch-anchor.plist  # fill in env
-launchctl load ~/Library/LaunchAgents/com.pointegrity.pouch-anchor.plist
-log stream --predicate 'process == "pouch-anchor"'
+cp examples/com.pointegrity.pouch-vault.plist ~/Library/LaunchAgents/
+$EDITOR ~/Library/LaunchAgents/com.pointegrity.pouch-vault.plist  # fill in env
+launchctl load ~/Library/LaunchAgents/com.pointegrity.pouch-vault.plist
+log stream --predicate 'process == "pouch-vault"'
 ```
 
 ### Docker (any OS that runs Docker)
 
 ```bash
-docker run -d --name pouch-anchor \
+docker run -d --name pouch-vault \
   -p 7780:7780 \
-  -v pouch-anchor-data:/data \
+  -v pouch-vault-data:/data \
   -e POUCH_URL=https://pouch.pointegrity.com \
   -e POUCH_ANCHOR_KEY=pk_... \
   -e POUCH_HMAC_SECRET=... \
-  -e POUCH_PUBLIC_URL=https://anchor.example/hook \
-  ghcr.io/pointegrity/pouch-anchor:latest
+  -e POUCH_PUBLIC_URL=https://vault.example/hook \
+  ghcr.io/pointegrity/pouch-vault:latest
 ```
 
 ### Windows
 
 There's no native Windows-service shim yet. Run from a terminal, or
 register a Scheduled Task with trigger "At startup" pointing at
-`pouch-anchor.exe` with the env vars set in the action's user
+`pouch-vault.exe` with the env vars set in the action's user
 context. Native `sc create` integration is on the Shape B roadmap.
 
 After any of these, you should see in the logs:
 
 ```
-pouch-anchor 0.1.0 listening on 127.0.0.1:7780, db=/var/lib/pouch-anchor/drops.db, pouch=https://pouch.pointegrity.com
-registered as anc-... (name=jy-laptop, public_url=https://anchor.example/hook)
+pouch-vault 0.1.0 listening on 127.0.0.1:7780, db=/var/lib/pouch-vault/drops.db, pouch=https://pouch.pointegrity.com
+registered as anc-... (name=jy-laptop, public_url=https://vault.example/hook)
 ```
 
 ## Verify it works
@@ -220,14 +220,14 @@ Drop something into your pouch (CLI, SPA, ingress key — whichever).
 Within a few seconds:
 
 ```bash
-sqlite3 /var/lib/pouch-anchor/drops.db \
+sqlite3 /var/lib/pouch-vault/drops.db \
   "SELECT received_at, drop_id, label FROM drops ORDER BY received_at DESC LIMIT 5"
 ```
 
 In the pouch admin shell:
 
 ```bash
-pouch anchor ls --owner <user-id>
+pouch vault ls --owner <user-id>
 # DROPS column climbs as deliveries land.
 ```
 
@@ -259,12 +259,12 @@ on the receiver side. See pouch issue tracker.
 | env / flag | meaning | default |
 |---|---|---|
 | `POUCH_URL` / `--pouch-url` | pouch SaaS base URL | (required) |
-| `POUCH_ANCHOR_KEY` / `--anchor-key` | API key from `pouch anchor create` | (required) |
+| `POUCH_ANCHOR_KEY` / `--vault-key` | API key from `pouch vault create` | (required) |
 | `POUCH_HMAC_SECRET` / `--hmac-secret` | delivery signature secret | (required) |
 | `POUCH_PUBLIC_URL` / `--public-url` | where pouch reaches us | (required) |
 | `ANCHOR_DB` / `--db` | sqlite database path | `drops.db` |
 | `ANCHOR_LISTEN` / `--addr` | listen address | `:7780` |
-| `ANCHOR_NAME` / `--name` | anchor name (heartbeat label) | `$HOSTNAME` |
+| `ANCHOR_NAME` / `--name` | vault name (heartbeat label) | `$HOSTNAME` |
 | `--heartbeat` | heartbeat interval | `30s` |
 
 CLI flags override env. Useful for local dev:
@@ -280,17 +280,17 @@ go run . -pouch-url http://localhost:8080 -public-url http://127.0.0.1:7780/hook
 If the API key or HMAC secret leaks, on the pouch admin shell:
 
 ```bash
-pouch anchor rm <anchor-id> --owner <user-id>     # nukes everything
-pouch anchor create --owner <user-id> --name ...  # mint replacement
+pouch vault rm <vault-id> --owner <user-id>     # nukes everything
+pouch vault create --owner <user-id> --name ...  # mint replacement
 ```
 
-Then update `/etc/pouch/anchor.env` on the anchor host and
-`systemctl restart pouch-anchor`.
+Then update `/etc/pouch/vault.env` on the vault host and
+`systemctl restart pouch-vault`.
 
 ## pouch CLI (`pouch put`)
 
 The same release ships `pouch`, a tiny client for sending drops *to*
-your pouch from any shell. Distinct from the anchor — the anchor
+your pouch from any shell. Distinct from the vault — the vault
 **receives** drops, the CLI **sends** them. Use both, neither, or one.
 
 ### Provisioning
@@ -308,7 +308,7 @@ it into the CLI's config file.
 
 ```bash
 # Linux amd64 example — pick the right binary for your OS/arch
-curl -fL -o pouch https://github.com/pointegrity/pouch-anchor/releases/latest/download/pouch-linux-amd64
+curl -fL -o pouch https://github.com/pointegrity/pouch-vault/releases/latest/download/pouch-linux-amd64
 chmod +x pouch
 sudo install -m 755 pouch /usr/local/bin/
 

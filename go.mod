@@ -1,4 +1,4 @@
-module github.com/pointegrity/pouch-anchor
+module github.com/pointegrity/pouch-vault
 
 go 1.25.0
 

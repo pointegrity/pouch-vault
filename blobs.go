@@ -1,4 +1,4 @@
-// blobs.go: anchor's local blob storage. Binary drops over the
+// blobs.go: vault's local blob storage. Binary drops over the
 // inline threshold get base64-decoded and written to disk so users
 // can browse them with native tools (`find . -name '*.png'`,
 // Preview, mpv, …) instead of having a base64 string sitting
@@ -130,7 +130,7 @@ func fetchBlobToDisk(ctx context.Context, blobsDir, signedURL, expectedSHA256, m
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "pouch-anchor/"+Version)
+	req.Header.Set("User-Agent", "pouch-vault/"+Version)
 	resp, err := blobHTTPClient.Do(req)
 	if err != nil {
 		return "", err

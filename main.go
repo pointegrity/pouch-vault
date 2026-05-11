@@ -1,4 +1,4 @@
-// pouch-anchor — Shape A: headless local relay daemon for pouch
+// pouch-vault — Shape A: headless local relay daemon for pouch
 // (https://pouch.pointegrity.com).
 //
 // What it does, in one paragraph: receives webhook deliveries from a
@@ -6,21 +6,21 @@
 // drop into a local SQLite database, and periodically heartbeats back
 // to pouch with stats (last drop seen, total drops, hostname,
 // version). The server side of this protocol lives in the pouch
-// repository; provisioning is a one-time `pouch anchor create
+// repository; provisioning is a one-time `pouch vault create
 // --owner <U> --name <N>` admin step which mints the API key + HMAC
-// secret you copy into the anchor's config.
+// secret you copy into the vault's config.
 //
 // Usage (env-var driven; all required):
 //
 //	POUCH_URL          https://pouch.pointegrity.com
-//	POUCH_ANCHOR_KEY   pk_...                    # from `pouch anchor create`
-//	POUCH_HMAC_SECRET  abcdef...                 # from `pouch anchor create`
-//	POUCH_PUBLIC_URL   https://anchor.example/hook   # how pouch reaches us
-//	ANCHOR_DB          /var/lib/pouch-anchor/drops.db
+//	POUCH_ANCHOR_KEY   pk_...                    # from `pouch vault create`
+//	POUCH_HMAC_SECRET  abcdef...                 # from `pouch vault create`
+//	POUCH_PUBLIC_URL   https://vault.example/hook   # how pouch reaches us
+//	ANCHOR_DB          /var/lib/pouch-vault/drops.db
 //	ANCHOR_LISTEN      :7780
 //	ANCHOR_NAME        jy-laptop                 # optional; defaults to hostname
 //
-// Built for systemd. See examples/pouch-anchor.service.
+// Built for systemd. See examples/pouch-vault.service.
 package main
 
 import (
@@ -38,12 +38,12 @@ import (
 )
 
 // Version is stamped into heartbeats so the SaaS replication-status
-// panel can flag stale anchor builds. Bump on release.
+// panel can flag stale vault builds. Bump on release.
 const Version = "0.8.0"
 
 type config struct {
 	pouchURL    string
-	anchorKey   string
+	vaultKey   string
 	hmacSecret  string
 	publicURL   string
 	dbPath      string
@@ -68,27 +68,27 @@ func loadConfig() (*config, error) {
 	c := &config{}
 
 	flag.StringVar(&c.pouchURL, "pouch-url", "", "pouch SaaS base URL")
-	flag.StringVar(&c.anchorKey, "anchor-key", "", "anchor API key (pk_...)")
+	flag.StringVar(&c.vaultKey, "vault-key", "", "vault API key (pk_...)")
 	flag.StringVar(&c.hmacSecret, "hmac-secret", "", "HMAC shared secret for webhook delivery")
-	flag.StringVar(&c.publicURL, "public-url", "", "where pouch can reach us, e.g. https://anchor.example/hook")
+	flag.StringVar(&c.publicURL, "public-url", "", "where pouch can reach us, e.g. https://vault.example/hook")
 	flag.StringVar(&c.dbPath, "db", "", "sqlite database path")
 	flag.StringVar(&c.blobsDir, "blobs", "", "directory for materialized binary blobs")
 	flag.StringVar(&c.listenAddr, "addr", "", "listen address")
-	flag.StringVar(&c.name, "name", "", "anchor name (defaults to hostname)")
+	flag.StringVar(&c.name, "name", "", "vault name (defaults to hostname)")
 	flag.DurationVar(&c.heartbeat, "heartbeat", 30*time.Second, "heartbeat interval")
 	flag.Parse()
 
 	// Now load the config file, with the resolution order:
 	//   1. explicit --config / $POUCH_ANCHOR_CONFIG path
-	//   2. <user-config-dir>/pouch-anchor/anchor.env
-	//   3. /etc/pouch/anchor.env
+	//   2. <user-config-dir>/pouch-vault/vault.env
+	//   3. /etc/pouch/vault.env
 	// loadEnvFile is no-op on missing files and never overrides
 	// existing env values, so env and CLI flags always win.
 	candidates := []string{cfgFile}
 	if userCfg, err := configPath(); err == nil {
 		candidates = append(candidates, userCfg)
 	}
-	candidates = append(candidates, "/etc/pouch/anchor.env")
+	candidates = append(candidates, "/etc/pouch/vault.env")
 	for _, p := range candidates {
 		if p == "" {
 			continue
@@ -101,7 +101,7 @@ func loadConfig() (*config, error) {
 	// CLI flag wins; else env (now possibly seeded from a file);
 	// else built-in default.
 	pickStr(&c.pouchURL,   "POUCH_URL", "")
-	pickStr(&c.anchorKey,  "POUCH_ANCHOR_KEY", "")
+	pickStr(&c.vaultKey,  "POUCH_ANCHOR_KEY", "")
 	pickStr(&c.hmacSecret, "POUCH_HMAC_SECRET", "")
 	pickStr(&c.publicURL,  "POUCH_PUBLIC_URL", "")
 	if c.dbPath == "" {
@@ -129,7 +129,7 @@ func loadConfig() (*config, error) {
 		if h, err := os.Hostname(); err == nil {
 			c.name = h
 		} else {
-			c.name = "anchor"
+			c.name = "vault"
 		}
 	}
 	c.pouchURL = strings.TrimRight(c.pouchURL, "/")
@@ -139,7 +139,7 @@ func loadConfig() (*config, error) {
 		val, name string
 	}{
 		{c.pouchURL, "POUCH_URL"},
-		{c.anchorKey, "POUCH_ANCHOR_KEY"},
+		{c.vaultKey, "POUCH_ANCHOR_KEY"},
 		{c.hmacSecret, "POUCH_HMAC_SECRET"},
 	} {
 		if m.val == "" {
@@ -176,17 +176,17 @@ func pickStr(dst *string, env, def string) {
 
 func main() {
 	// Subcommands are matched on os.Args[1] before flag parsing so
-	// `pouch-anchor init --force` doesn't try to feed --force to the
+	// `pouch-vault init --force` doesn't try to feed --force to the
 	// daemon's flag set.
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
 		case "init":
 			if err := runInit(os.Args[2:]); err != nil {
-				log.Fatalf("pouch-anchor init: %v", err)
+				log.Fatalf("pouch-vault init: %v", err)
 			}
 			return
 		case "version", "--version", "-v":
-			fmt.Printf("pouch-anchor %s\n", Version)
+			fmt.Printf("pouch-vault %s\n", Version)
 			return
 		case "help", "--help", "-h":
 			printHelp()
@@ -195,47 +195,47 @@ func main() {
 	}
 
 	if err := run(); err != nil {
-		log.Fatalf("pouch-anchor: %v", err)
+		log.Fatalf("pouch-vault: %v", err)
 	}
 }
 
 func printHelp() {
-	fmt.Fprint(os.Stderr, `pouch-anchor — local relay daemon for pouch.
+	fmt.Fprint(os.Stderr, `pouch-vault — local relay daemon for pouch.
 
 Usage:
-  pouch-anchor                   run the daemon (reads config from env / file)
-  pouch-anchor init [--force]    scaffold OS-conventional config + data dirs
-  pouch-anchor version           print version and exit
-  pouch-anchor help              print this help
+  pouch-vault                   run the daemon (reads config from env / file)
+  pouch-vault init [--force]    scaffold OS-conventional config + data dirs
+  pouch-vault version           print version and exit
+  pouch-vault help              print this help
 
 Required (both modes):
   POUCH_URL          --pouch-url     pouch SaaS base URL
-  POUCH_ANCHOR_KEY   --anchor-key    anchor API key
+  POUCH_ANCHOR_KEY   --vault-key    vault API key
   POUCH_HMAC_SECRET  --hmac-secret   delivery signature secret
 
 Optional:
   POUCH_PUBLIC_URL   --public-url    enables PUSH mode — pouch POSTs to this URL.
-                                     Unset (default) = PULL mode: anchor opens an
+                                     Unset (default) = PULL mode: vault opens an
                                      SSE connection to pouch. Pull mode needs no
                                      publicly-reachable endpoint, no firewall hole,
                                      no tunneling. Recommended for most users.
   ANCHOR_DB          --db            sqlite database path
   ANCHOR_LISTEN      --addr          local listener (push mode: receives /hook;
                                      pull mode: just /healthz; "off" disables)
-  ANCHOR_NAME        --name          anchor name (defaults to hostname)
+  ANCHOR_NAME        --name          vault name (defaults to hostname)
                      --heartbeat     heartbeat interval (default 30s)
                      --config        explicit config file path
 
 The daemon also reads an env-style config file. Lookup order:
   1. --config <path> / $POUCH_ANCHOR_CONFIG
-  2. <user-config-dir>/pouch-anchor/anchor.env
+  2. <user-config-dir>/pouch-vault/vault.env
        (Linux: ~/.config; macOS: ~/Library/Application Support; Windows: %AppData%)
-  3. /etc/pouch/anchor.env (system-wide)
+  3. /etc/pouch/vault.env (system-wide)
 File values fill in any env var that's NOT already set — env / flags always win.
 
 Provisioning:
-  pouch anchor create --owner <U> --name <N>     (admin shell on pouch server)
-  pouch-anchor init                              (here, on the anchor host)
+  pouch vault create --owner <U> --name <N>     (admin shell on pouch server)
+  pouch-vault init                              (here, on the vault host)
 `)
 }
 
@@ -251,16 +251,16 @@ func run() error {
 	}
 	defer store.Close()
 
-	// Outbound client (anchor → pouch). Used immediately for register
+	// Outbound client (vault → pouch). Used immediately for register
 	// + every heartbeat thereafter (and, in pull mode, for the SSE
 	// stream).
-	client := NewPouchClient(cfg.pouchURL, cfg.anchorKey)
+	client := NewPouchClient(cfg.pouchURL, cfg.vaultKey)
 
 	// Register with pouch. In pull mode publicURL is empty, which
 	// pouch v0.2+ accepts (it tells the dispatcher to route via the
 	// SSE hub instead of HTTP POST).
 	regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	anchorID, err := client.Register(regCtx, cfg.publicURL, hostnameOr("anchor"), Version)
+	vaultID, err := client.Register(regCtx, cfg.publicURL, hostnameOr("vault"), Version)
 	regCancel()
 	if err != nil {
 		return fmt.Errorf("register with pouch: %w", err)
@@ -270,15 +270,15 @@ func run() error {
 	if cfg.publicURL != "" {
 		mode = "push"
 	}
-	log.Printf("registered as %s (name=%s, mode=%s)", anchorID, cfg.name, mode)
+	log.Printf("registered as %s (name=%s, mode=%s)", vaultID, cfg.name, mode)
 
 	// Initialize the shared status singleton — used by the local UI
 	// + the daemon's introspection.
-	status.AnchorName = cfg.name
-	status.AnchorID = anchorID
+	status.VaultName = cfg.name
+	status.VaultID = vaultID
 	status.Version = Version
 	status.Mode = mode
-	status.Hostname = hostnameOr("anchor")
+	status.Hostname = hostnameOr("vault")
 	status.PouchURL = cfg.pouchURL
 	status.DBPath = cfg.dbPath
 	status.StartedAt = time.Now().UTC()
@@ -300,13 +300,13 @@ func run() error {
 		if cfg.listenAddr != "" && cfg.listenAddr != "off" {
 			go runLocalListener(ctx, cfg.listenAddr, store, cfg.blobsDir)
 		}
-		log.Printf("pouch-anchor %s pull-mode, db=%s, blobs=%s, pouch=%s",
+		log.Printf("pouch-vault %s pull-mode, db=%s, blobs=%s, pouch=%s",
 			Version, cfg.dbPath, cfg.blobsDir, cfg.pouchURL)
 		if cfg.listenAddr != "off" {
 			log.Printf("local UI: http://%s/ui", normalizeListenForURL(cfg.listenAddr))
 		}
 		runStream(ctx, client, store, cfg.hmacSecret, cfg.blobsDir)
-		log.Printf("pouch-anchor: stopped")
+		log.Printf("pouch-vault: stopped")
 		return nil
 	}
 
@@ -330,19 +330,19 @@ func run() error {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("pouch-anchor %s push-mode, listening on %s, db=%s, pouch=%s",
+	log.Printf("pouch-vault %s push-mode, listening on %s, db=%s, pouch=%s",
 		Version, cfg.listenAddr, cfg.dbPath, cfg.pouchURL)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
-	log.Printf("pouch-anchor: stopped")
+	log.Printf("pouch-vault: stopped")
 	return nil
 }
 
 // runLocalListener serves the local-UI surface (status, recent
 // drops, viewer HTML) plus /healthz on addr. Used in pull mode where
 // there's no /hook. The mux comes pre-wired by mountLocalUI; the
-// extra arg is for future use (push-mode receivers, anchor-only
+// extra arg is for future use (push-mode receivers, vault-only
 // admin endpoints, etc).
 func runLocalListener(ctx context.Context, addr string, st *Store, blobsDir string) {
 	mux := http.NewServeMux()

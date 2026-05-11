@@ -43,7 +43,7 @@ type payloadBlob struct {
 	SHA256 string `json:"sha256"`
 }
 
-// Receiver is the HTTP handler half of pouch-anchor: receives
+// Receiver is the HTTP handler half of pouch-vault: receives
 // webhook deliveries from pouch, verifies the HMAC, dedups by
 // X-Pouch-Delivery, and writes to the local store.
 type Receiver struct {
@@ -54,8 +54,8 @@ type Receiver struct {
 }
 
 // NewReceiver constructs the receiver bound to a concrete store +
-// shared HMAC secret. The secret was minted by `pouch anchor create`
-// on the server side and copied into the anchor's config.
+// shared HMAC secret. The secret was minted by `pouch vault create`
+// on the server side and copied into the vault's config.
 func NewReceiver(store *Store, hmacSecret, blobsDir string) *Receiver {
 	return &Receiver{
 		store:      store,
