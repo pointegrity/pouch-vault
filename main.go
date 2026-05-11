@@ -185,6 +185,11 @@ func main() {
 				log.Fatalf("pouch-vault init: %v", err)
 			}
 			return
+		case "pair":
+			if err := runPair(os.Args[2:]); err != nil {
+				log.Fatalf("pouch-vault pair: %v", err)
+			}
+			return
 		case "version", "--version", "-v":
 			fmt.Printf("pouch-vault %s\n", Version)
 			return
@@ -204,6 +209,8 @@ func printHelp() {
 
 Usage:
   pouch-vault                   run the daemon (reads config from env / file)
+  pouch-vault pair              first-boot: exchange a pairing key for
+                                long-lived credentials (printed once)
   pouch-vault init [--force]    scaffold OS-conventional config + data dirs
   pouch-vault version           print version and exit
   pouch-vault help              print this help

@@ -26,7 +26,12 @@ func runHeartbeats(ctx context.Context, client *PouchClient, store *Store, inter
 		// pouch wedge the loop.
 		hbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		if err := client.Heartbeat(hbCtx, lastID, count); err != nil {
+		// Paths stay nil for kind=local — this vault doesn't watch
+		// folders; the SSE-mirror flow tracks drops at the channel
+		// level. pouch-vault-git's heartbeat is where per-path counts
+		// matter. The cloud's rolling-window code becomes a no-op when
+		// paths is empty (just bumps last_seen_at).
+		if err := client.Heartbeat(hbCtx, lastID, count, nil); err != nil {
 			log.Printf("heartbeat: %v", err)
 			status.MarkHeartbeatError(err.Error())
 			return
