@@ -9,12 +9,31 @@ import (
 // runHeartbeats reports the vault's local stats to pouch every
 // `interval`. Returns when ctx is cancelled. First tick fires
 // immediately so the dashboard updates without waiting an interval.
-func runHeartbeats(ctx context.Context, client *PouchClient, store *Store, interval time.Duration) {
+//
+// declaredPaths is the vault's VAULT_PATHS config — included on
+// every heartbeat so the cloud's channel reconciliation stays in
+// sync without needing a separate "re-register" cadence. Count
+// stays 0 for kind=local since this binary doesn't track folder
+// activity (the SSE-mirror flow handles drops at the channel
+// level); the stream field on each entry is what makes
+// reconciliation fire on the cloud side.
+func runHeartbeats(ctx context.Context, client *PouchClient, store *Store, interval time.Duration, declaredPaths []ConfigPath) {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
+
+	hbPaths := make([]HeartbeatPath, 0, len(declaredPaths))
+	for _, p := range declaredPaths {
+		hbPaths = append(hbPaths, HeartbeatPath{
+			Path:   p.Path,
+			Stream: p.Stream,
+			// Count stays 0 — kind=local doesn't watch folders.
+			// kind=git's heartbeat (different binary) is where
+			// count is load-bearing.
+		})
+	}
 
 	tick := func() {
 		count, lastID, err := store.Stats(ctx)
@@ -26,12 +45,7 @@ func runHeartbeats(ctx context.Context, client *PouchClient, store *Store, inter
 		// pouch wedge the loop.
 		hbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		// Paths stay nil for kind=local — this vault doesn't watch
-		// folders; the SSE-mirror flow tracks drops at the channel
-		// level. pouch-vault-git's heartbeat is where per-path counts
-		// matter. The cloud's rolling-window code becomes a no-op when
-		// paths is empty (just bumps last_seen_at).
-		if err := client.Heartbeat(hbCtx, lastID, count, nil); err != nil {
+		if err := client.Heartbeat(hbCtx, lastID, count, hbPaths); err != nil {
 			log.Printf("heartbeat: %v", err)
 			status.MarkHeartbeatError(err.Error())
 			return

@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -51,6 +52,22 @@ type config struct {
 	listenAddr  string
 	name        string
 	heartbeat   time.Duration
+	// paths is the multi-folder declaration this vault binary
+	// owns. Each entry is a {path, stream, label?}. The vault
+	// sends paths[] on register + heartbeat; the cloud
+	// reconciles channels from them per decision
+	// vault-declares-paths-cloud-reflects-channels. Empty list
+	// is allowed — vault pairs but routes nothing until paths
+	// are configured.
+	paths       []ConfigPath
+}
+
+// ConfigPath is one entry parsed out of VAULT_PATHS. JSON shape:
+//   [{"path":"scrapes/","stream":"trip","label":"web scrapes"}]
+type ConfigPath struct {
+	Path   string `json:"path"`
+	Stream string `json:"stream"`
+	Label  string `json:"label,omitempty"`
 }
 
 func loadConfig() (*config, error) {
@@ -124,6 +141,25 @@ func loadConfig() (*config, error) {
 	}
 	pickStr(&c.listenAddr, "VAULT_LISTEN", ":7780")
 	pickStr(&c.name,       "VAULT_NAME", "")
+
+	// VAULT_PATHS is a JSON array of {path, stream, label?}. Parsed
+	// once at boot; the resolved list rides on every register and
+	// heartbeat so the cloud can reconcile channels (decision
+	// vault-declares-paths-cloud-reflects-channels). Empty / unset
+	// is fine — vault pairs but routes nothing.
+	if raw := os.Getenv("VAULT_PATHS"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &c.paths); err != nil {
+			return nil, fmt.Errorf("VAULT_PATHS: %w", err)
+		}
+		for i, p := range c.paths {
+			if p.Path == "" {
+				return nil, fmt.Errorf("VAULT_PATHS[%d]: path required", i)
+			}
+			if p.Stream == "" {
+				return nil, fmt.Errorf("VAULT_PATHS[%d]: stream required", i)
+			}
+		}
+	}
 
 	if c.name == "" {
 		if h, err := os.Hostname(); err == nil {
@@ -265,9 +301,20 @@ func run() error {
 
 	// Register with pouch. In pull mode publicURL is empty, which
 	// pouch v0.2+ accepts (it tells the dispatcher to route via the
-	// SSE hub instead of HTTP POST).
+	// SSE hub instead of HTTP POST). The declared paths[] from
+	// VAULT_PATHS rides along so the cloud reconciles channels
+	// before the first heartbeat (decision
+	// vault-declares-paths-cloud-reflects-channels).
+	regPaths := make([]RegisterPath, 0, len(cfg.paths))
+	for _, p := range cfg.paths {
+		regPaths = append(regPaths, RegisterPath{
+			Path:   p.Path,
+			Stream: p.Stream,
+			Label:  p.Label,
+		})
+	}
 	regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	vaultID, err := client.Register(regCtx, cfg.publicURL, hostnameOr("vault"), Version)
+	vaultID, err := client.Register(regCtx, cfg.publicURL, hostnameOr("vault"), Version, regPaths)
 	regCancel()
 	if err != nil {
 		return fmt.Errorf("register with pouch: %w", err)
@@ -298,7 +345,7 @@ func run() error {
 	// is the primary "I'm alive" signal; the heartbeat additionally
 	// reports last_drop_id and total_drops so the SaaS UI can show
 	// archive progress.
-	go runHeartbeats(ctx, client, store, cfg.heartbeat)
+	go runHeartbeats(ctx, client, store, cfg.heartbeat, cfg.paths)
 
 	if mode == "pull" {
 		// Pull mode: no inbound /hook needed. Still useful to serve

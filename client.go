@@ -33,13 +33,20 @@ func NewPouchClient(baseURL, apiKey string) *PouchClient {
 	}
 }
 
-// Register tells pouch our public URL + identity. Idempotent; called
-// on every vault boot before the heartbeat loop starts.
-func (c *PouchClient) Register(ctx context.Context, publicURL, hostname, version string) (vaultID string, err error) {
+// Register tells pouch our public URL + identity + declared paths.
+// Idempotent; called on every vault boot before the heartbeat loop
+// starts. The paths argument carries this vault's multi-folder
+// declaration — cloud reconciles channels from it (decision
+// vault-declares-paths-cloud-reflects-channels). Empty paths is
+// fine; vault pairs but routes nothing until configured.
+func (c *PouchClient) Register(ctx context.Context, publicURL, hostname, version string, paths []RegisterPath) (vaultID string, err error) {
 	in := map[string]any{
 		"public_url": publicURL,
 		"hostname":   hostname,
 		"version":    version,
+	}
+	if len(paths) > 0 {
+		in["paths"] = paths
 	}
 	out := struct {
 		VaultID string `json:"vault_id"`
@@ -48,6 +55,14 @@ func (c *PouchClient) Register(ctx context.Context, publicURL, hostname, version
 		return "", err
 	}
 	return out.VaultID, nil
+}
+
+// RegisterPath is one path declaration sent in Register payload.
+// Same shape as cloud's store.VaultPath (cloud accepts label too).
+type RegisterPath struct {
+	Path   string `json:"path"`
+	Stream string `json:"stream"`
+	Label  string `json:"label,omitempty"`
 }
 
 // Heartbeat reports last-drop / total-drops to pouch. Optionally
@@ -65,10 +80,16 @@ func (c *PouchClient) Heartbeat(ctx context.Context, lastDropID string, totalDro
 	return c.post(ctx, "/api/vaults/heartbeat", in, nil)
 }
 
-// HeartbeatPath is one (path, count) tuple emitted with a heartbeat.
+// HeartbeatPath is one (path, count, stream?) tuple emitted with a
+// heartbeat. Stream is set when this vault has the path declared
+// with a stream binding (decision
+// vault-declares-paths-cloud-reflects-channels) — the cloud
+// reconciles channels from the heartbeat in addition to bumping
+// rolling-window counters.
 type HeartbeatPath struct {
-	Path  string `json:"path"`
-	Count int64  `json:"count"`
+	Path   string `json:"path"`
+	Count  int64  `json:"count"`
+	Stream string `json:"stream,omitempty"`
 }
 
 // PairResult is what /api/vaults/pair returns. All three secrets
