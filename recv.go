@@ -34,6 +34,10 @@ type payloadDrop struct {
 	Tags         []string       `json:"tags,omitempty"`
 	MIME         string         `json:"mime,omitempty"`
 	Source       string         `json:"source,omitempty"`
+	// OriginalPath: producer-stamped path (Phase 5 slice 8c).
+	// Empty for drops produced by non-vault flows; populated by
+	// pouch-vault sync/watch and pouch-vault-git put.
+	OriginalPath string         `json:"original_path,omitempty"`
 	CreatedAt    time.Time      `json:"created_at"`
 }
 
@@ -102,6 +106,7 @@ func (r *Receiver) Handler() http.HandlerFunc {
 			Tags:         p.Drop.Tags,
 			MIME:         p.Drop.MIME,
 			Source:       p.Drop.Source,
+			OriginalPath: p.Drop.OriginalPath,
 			CreatedAt:    p.Drop.CreatedAt,
 			ReceivedAt:   time.Now().UTC(),
 		}

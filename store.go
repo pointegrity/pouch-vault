@@ -36,6 +36,13 @@ type Drop struct {
 	Tags         []string
 	MIME         string
 	Source       string
+	// OriginalPath is the source-side path the drop came from
+	// (e.g. "scrapes/example.com/page.html" or "session-1.json").
+	// Populated from the WebhookDrop.OriginalPath field that
+	// producer flows (pouch-vault sync, pouch-vault-git put)
+	// stamp on the cloud-side item. Used by `pouch-vault history
+	// --path <orig>` to find every version of a logical file.
+	OriginalPath string
 	CreatedAt    time.Time
 	ReceivedAt   time.Time
 }
@@ -71,6 +78,9 @@ ALTER TABLE drops ADD COLUMN body_encoding TEXT NOT NULL DEFAULT 'utf8';
 ALTER TABLE drops ADD COLUMN body_sha256 TEXT;
 ALTER TABLE drops ADD COLUMN body_blob_path TEXT;
 ALTER TABLE drops ADD COLUMN body_size INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE drops ADD COLUMN original_path TEXT;
+CREATE INDEX IF NOT EXISTS idx_drops_orig ON drops(original_path) WHERE original_path IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_drops_label ON drops(label) WHERE label IS NOT NULL;
 `
 
 // OpenStore creates / opens a vault's local DB. _journal=WAL keeps
@@ -128,14 +138,82 @@ func (s *Store) Insert(ctx context.Context, d *Drop) error {
 		INSERT OR IGNORE INTO drops
 		  (delivery_id, drop_id, pouch_user, stream, label, body, body_encoding,
 		   body_sha256, body_blob_path, body_size, tags,
-		   mime, source, created_at, received_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   mime, source, original_path, created_at, received_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, d.DeliveryID, d.DropID, d.PouchUser, d.Stream,
 		d.Label, d.Body, enc,
 		nullStr(d.BodySHA256), nullStr(d.BodyBlobPath), d.BodySize,
-		tagsJSON, d.MIME, d.Source,
+		tagsJSON, d.MIME, d.Source, nullStr(d.OriginalPath),
 		d.CreatedAt, d.ReceivedAt)
 	return err
+}
+
+// HistoryFilter narrows ListHistory. Zero-value lists all drops.
+// Combine with AND.
+type HistoryFilter struct {
+	Stream string // exact stream name
+	Label  string // case-insensitive substring match
+	Path   string // exact original_path match
+	Limit  int    // 0 -> 50
+}
+
+// ListHistory returns drops matching the filter, newest first.
+// Used by `pouch-vault history` to surface the catalog's free
+// versioning (multiple drops with the same label / original_path
+// = a version chain). Phase 5 slice 8c.
+func (s *Store) ListHistory(ctx context.Context, f HistoryFilter) ([]Drop, error) {
+	q := `
+		SELECT delivery_id, drop_id, pouch_user, stream, label, body, body_encoding,
+		       body_sha256, body_blob_path, body_size, tags,
+		       mime, source, original_path, created_at, received_at
+		FROM drops
+		WHERE 1=1`
+	args := []any{}
+	if f.Stream != "" {
+		q += ` AND stream = ?`
+		args = append(args, f.Stream)
+	}
+	if f.Label != "" {
+		q += ` AND LOWER(label) LIKE ?`
+		args = append(args, "%"+strings.ToLower(f.Label)+"%")
+	}
+	if f.Path != "" {
+		q += ` AND original_path = ?`
+		args = append(args, f.Path)
+	}
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	q += ` ORDER BY received_at DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Drop{}
+	for rows.Next() {
+		var d Drop
+		var tagsStr string
+		var bsha, blobPath, origPath sql.NullString
+		if err := rows.Scan(&d.DeliveryID, &d.DropID, &d.PouchUser, &d.Stream,
+			&d.Label, &d.Body, &d.BodyEncoding,
+			&bsha, &blobPath, &d.BodySize,
+			&tagsStr, &d.MIME, &d.Source, &origPath,
+			&d.CreatedAt, &d.ReceivedAt); err != nil {
+			return nil, err
+		}
+		d.BodySHA256 = bsha.String
+		d.BodyBlobPath = blobPath.String
+		d.OriginalPath = origPath.String
+		if tagsStr != "" && tagsStr != "[]" {
+			_ = json.Unmarshal([]byte(tagsStr), &d.Tags)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 func nullStr(s string) any {
@@ -249,7 +327,7 @@ func (s *Store) Get(ctx context.Context, dropID string) (*Drop, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT delivery_id, drop_id, pouch_user, stream, label, body, body_encoding,
 		       body_sha256, body_blob_path, body_size, tags,
-		       mime, source, created_at, received_at
+		       mime, source, original_path, created_at, received_at
 		FROM drops
 		WHERE drop_id = ?
 		ORDER BY received_at DESC
@@ -257,14 +335,15 @@ func (s *Store) Get(ctx context.Context, dropID string) (*Drop, error) {
 	`, dropID)
 	var d Drop
 	var tagsStr string
-	var sha, blobPath sql.NullString
+	var sha, blobPath, origPath sql.NullString
 	err := row.Scan(&d.DeliveryID, &d.DropID, &d.PouchUser, &d.Stream,
 		&d.Label, &d.Body, &d.BodyEncoding,
 		&sha, &blobPath, &d.BodySize,
-		&tagsStr, &d.MIME, &d.Source,
+		&tagsStr, &d.MIME, &d.Source, &origPath,
 		&d.CreatedAt, &d.ReceivedAt)
 	d.BodySHA256 = sha.String
 	d.BodyBlobPath = blobPath.String
+	d.OriginalPath = origPath.String
 	if err != nil {
 		if err.Error() == "sql: no rows in result set" {
 			return nil, nil

@@ -146,6 +146,7 @@ func handleStreamDrop(ctx context.Context, store *Store, hmacSecret, blobsDir st
 		Tags:         p.Drop.Tags,
 		MIME:         p.Drop.MIME,
 		Source:       p.Drop.Source,
+		OriginalPath: p.Drop.OriginalPath,
 		CreatedAt:    p.Drop.CreatedAt,
 		ReceivedAt:   time.Now().UTC(),
 	}

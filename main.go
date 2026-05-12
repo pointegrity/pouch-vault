@@ -252,6 +252,16 @@ func main() {
 				log.Fatalf("pouch-vault watch: %v", err)
 			}
 			return
+		case "history":
+			if err := runHistory(os.Args[2:]); err != nil {
+				log.Fatalf("pouch-vault history: %v", err)
+			}
+			return
+		case "get":
+			if err := runGet(os.Args[2:]); err != nil {
+				log.Fatalf("pouch-vault get: %v", err)
+			}
+			return
 		case "version", "--version", "-v":
 			fmt.Printf("pouch-vault %s\n", Version)
 			return
