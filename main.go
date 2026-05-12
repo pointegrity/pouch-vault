@@ -63,11 +63,27 @@ type config struct {
 }
 
 // ConfigPath is one entry parsed out of VAULT_PATHS. JSON shape:
-//   [{"path":"scrapes/","stream":"trip","label":"web scrapes"}]
+//   [{"path":"scrapes/","stream":"trip","direction":"watch"}]
+//
+// Direction controls which data flow uses this entry:
+//   "mirror" (default) — cloud delivers drops here (SSE-mirror flow).
+//   "watch"            — vault scans this folder for new/changed
+//                        files and POSTs them as drops via
+//                        `pouch-vault sync` / `watch` subcommands.
+// Per decision vault-producer-mode-and-local-only-git.
 type ConfigPath struct {
-	Path   string `json:"path"`
-	Stream string `json:"stream"`
-	Label  string `json:"label,omitempty"`
+	Path      string `json:"path"`
+	Stream    string `json:"stream"`
+	Label     string `json:"label,omitempty"`
+	Direction string `json:"direction,omitempty"`
+}
+
+// effectiveDirection returns the direction with the default applied.
+func (p ConfigPath) effectiveDirection() string {
+	if p.Direction == "" {
+		return "mirror"
+	}
+	return p.Direction
 }
 
 func loadConfig() (*config, error) {
@@ -226,6 +242,11 @@ func main() {
 				log.Fatalf("pouch-vault pair: %v", err)
 			}
 			return
+		case "sync":
+			if err := runSync(os.Args[2:]); err != nil {
+				log.Fatalf("pouch-vault sync: %v", err)
+			}
+			return
 		case "version", "--version", "-v":
 			fmt.Printf("pouch-vault %s\n", Version)
 			return
@@ -247,6 +268,9 @@ Usage:
   pouch-vault                   run the daemon (reads config from env / file)
   pouch-vault pair              first-boot: exchange a pairing key for
                                 long-lived credentials (printed once)
+  pouch-vault sync [--dry]      one-shot: scan every VAULT_PATHS entry with
+                                direction='watch' and drop new/changed files
+                                into pouch. Schedule via cron.
   pouch-vault init [--force]    scaffold OS-conventional config + data dirs
   pouch-vault version           print version and exit
   pouch-vault help              print this help

@@ -151,6 +151,38 @@ func (c *PouchClient) Pair(ctx context.Context, in PairInput) (*PairResult, erro
 	return &out, nil
 }
 
+// DropInput is the body shape POST /api/items expects from a
+// producer-mode vault. The cloud-side handler treats X-Vault-Key
+// as auth and stamps source as "vault:<id>".
+type DropInput struct {
+	Label        string   `json:"label"`
+	Body         string   `json:"body"`
+	BodyEncoding string   `json:"body_encoding,omitempty"`
+	MIME         string   `json:"mime,omitempty"`
+	Stream       string   `json:"stream,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	OriginalPath string   `json:"original_path,omitempty"`
+}
+
+// DropResult is the slim projection of POST /api/items we care
+// about — just enough to record the drop_id in the state file.
+type DropResult struct {
+	ID string `json:"id"`
+}
+
+// PostDrop creates a drop in pouch on behalf of this vault's
+// owner user. Auth is X-Vault-Key (Phase 5
+// vault-producer-mode-and-local-only-git decision). Used by
+// `pouch-vault sync` / `watch` after a new file is detected on
+// a direction='watch' path.
+func (c *PouchClient) PostDrop(ctx context.Context, in DropInput) (*DropResult, error) {
+	var out DropResult
+	if err := c.post(ctx, "/api/items", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // post is the shared codepath. Marshal, set headers, send, decode
 // (when out != nil), surface non-2xx as an error.
 func (c *PouchClient) post(ctx context.Context, path string, in, out any) error {
