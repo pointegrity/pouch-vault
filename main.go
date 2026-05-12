@@ -247,6 +247,11 @@ func main() {
 				log.Fatalf("pouch-vault sync: %v", err)
 			}
 			return
+		case "watch":
+			if err := runWatch(os.Args[2:]); err != nil {
+				log.Fatalf("pouch-vault watch: %v", err)
+			}
+			return
 		case "version", "--version", "-v":
 			fmt.Printf("pouch-vault %s\n", Version)
 			return
@@ -271,6 +276,10 @@ Usage:
   pouch-vault sync [--dry]      one-shot: scan every VAULT_PATHS entry with
                                 direction='watch' and drop new/changed files
                                 into pouch. Schedule via cron.
+  pouch-vault watch             long-running daemon: fsnotify-driven
+                                producer. Coalesces rapid-fire events with
+                                a 500ms debounce; falls back to a 30s
+                                safety scan.
   pouch-vault init [--force]    scaffold OS-conventional config + data dirs
   pouch-vault version           print version and exit
   pouch-vault help              print this help
