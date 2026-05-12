@@ -49,6 +49,7 @@ type config struct {
 	publicURL   string
 	dbPath      string
 	blobsDir    string
+	mirrorDir   string
 	listenAddr  string
 	name        string
 	heartbeat   time.Duration
@@ -106,6 +107,7 @@ func loadConfig() (*config, error) {
 	flag.StringVar(&c.publicURL, "public-url", "", "where pouch can reach us, e.g. https://vault.example/hook")
 	flag.StringVar(&c.dbPath, "db", "", "sqlite database path")
 	flag.StringVar(&c.blobsDir, "blobs", "", "directory for materialized binary blobs")
+	flag.StringVar(&c.mirrorDir, "mirror", "", "directory for path-mirrored copies (streams with layout=mirror)")
 	flag.StringVar(&c.listenAddr, "addr", "", "listen address")
 	flag.StringVar(&c.name, "name", "", "vault name (defaults to hostname)")
 	flag.DurationVar(&c.heartbeat, "heartbeat", 30*time.Second, "heartbeat interval")
@@ -153,6 +155,17 @@ func loadConfig() (*config, error) {
 			c.blobsDir = envOr("VAULT_BLOBS", filepath.Join(d, "blobs"))
 		} else {
 			c.blobsDir = envOr("VAULT_BLOBS", "blobs")
+		}
+	}
+	if c.mirrorDir == "" {
+		// Default: sibling "mirror/" directory next to blobs/. Drops
+		// with stream.layout=mirror AND a non-empty original_path
+		// also land here under the path the producer stamped, so
+		// the user can browse with native tools.
+		if d, err := dataDir(); err == nil {
+			c.mirrorDir = envOr("VAULT_MIRROR", filepath.Join(d, "mirror"))
+		} else {
+			c.mirrorDir = envOr("VAULT_MIRROR", "mirror")
 		}
 	}
 	pickStr(&c.listenAddr, "VAULT_LISTEN", ":7780")
@@ -397,12 +410,12 @@ func run() error {
 		if cfg.listenAddr != "" && cfg.listenAddr != "off" {
 			go runLocalListener(ctx, cfg.listenAddr, store, cfg.blobsDir)
 		}
-		log.Printf("pouch-vault %s pull-mode, db=%s, blobs=%s, pouch=%s",
-			Version, cfg.dbPath, cfg.blobsDir, cfg.pouchURL)
+		log.Printf("pouch-vault %s pull-mode, db=%s, blobs=%s, mirror=%s, pouch=%s",
+			Version, cfg.dbPath, cfg.blobsDir, cfg.mirrorDir, cfg.pouchURL)
 		if cfg.listenAddr != "off" {
 			log.Printf("local UI: http://%s/ui", normalizeListenForURL(cfg.listenAddr))
 		}
-		runStream(ctx, client, store, cfg.hmacSecret, cfg.blobsDir)
+		runStream(ctx, client, store, cfg.hmacSecret, cfg.blobsDir, cfg.mirrorDir)
 		log.Printf("pouch-vault: stopped")
 		return nil
 	}
@@ -410,7 +423,7 @@ func run() error {
 	// Push mode: pouch POSTs /hook deliveries to us. Same shape as
 	// the regular webhook receiver (HMAC verify + dedup + insert).
 	// We still mount the local UI on the same listener.
-	receiver := NewReceiver(store, cfg.hmacSecret, cfg.blobsDir)
+	receiver := NewReceiver(store, cfg.hmacSecret, cfg.blobsDir, cfg.mirrorDir)
 	mux := http.NewServeMux()
 	mux.Handle("POST /hook", receiver.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {

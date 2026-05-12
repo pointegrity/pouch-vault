@@ -19,6 +19,12 @@ type payload struct {
 	Event     string    `json:"event"`
 	PouchUser string    `json:"pouch_user"`
 	Stream    string    `json:"stream"`
+	// StreamLayout is the stream's disk-layout policy ("flat" or
+	// "mirror"). When "mirror" and the drop carries an
+	// original_path, the vault also writes the bytes to
+	// mirror/<original_path>. Empty = treat as flat. Phase 5
+	// slice 8d.
+	StreamLayout string  `json:"stream_layout,omitempty"`
 	SentAt    time.Time `json:"sent_at"`
 	Drop      payloadDrop `json:"drop"`
 }
@@ -54,17 +60,19 @@ type Receiver struct {
 	store      *Store
 	hmacSecret string
 	blobsDir   string
+	mirrorDir  string
 	dedup      *dedupRing
 }
 
 // NewReceiver constructs the receiver bound to a concrete store +
-// shared HMAC secret. The secret was minted by `pouch vault create`
-// on the server side and copied into the vault's config.
-func NewReceiver(store *Store, hmacSecret, blobsDir string) *Receiver {
+// shared HMAC secret. The secret was minted at pair time and
+// copied into the vault's config.
+func NewReceiver(store *Store, hmacSecret, blobsDir, mirrorDir string) *Receiver {
 	return &Receiver{
 		store:      store,
 		hmacSecret: hmacSecret,
 		blobsDir:   blobsDir,
+		mirrorDir:  mirrorDir,
 		dedup:      newDedupRing(1024),
 	}
 }
@@ -112,6 +120,9 @@ func (r *Receiver) Handler() http.HandlerFunc {
 		}
 		if err := materializeBlob(drop, r.blobsDir); err != nil {
 			log.Printf("recv: materialize %s: %v", drop.DropID, err)
+		}
+		if err := materializeMirror(drop, p.StreamLayout, r.blobsDir, r.mirrorDir); err != nil {
+			log.Printf("recv: mirror %s: %v", drop.DropID, err)
 		}
 		if err := r.store.Insert(req.Context(), drop); err != nil {
 			log.Printf("store insert %s: %v", drop.DropID, err)
