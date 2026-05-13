@@ -301,6 +301,16 @@ func (c *PouchClient) GetBlobStatus(ctx context.Context, blobID string) (*BlobSt
 	return &out, nil
 }
 
+// AckDrop confirms to cloud that this vault has materialized the
+// given drop's blob to local disk. Drives the relay-mode GC
+// sweeper. Idempotent on cloud (UPSERT on conflict).
+func (c *PouchClient) AckDrop(ctx context.Context, dropID, blobID string) error {
+	return c.post(ctx, "/api/items/"+dropID+"/ack", map[string]any{
+		"blob_id":         blobID,
+		"sha256_verified": true,
+	}, nil)
+}
+
 // CancelBlob deletes an open chunked-upload blob. Idempotent in spirit
 // — cloud returns 409 if the blob isn't open anymore (already ready
 // or cancelled), which the caller can treat as "no work needed."

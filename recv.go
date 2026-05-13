@@ -48,6 +48,7 @@ type payloadDrop struct {
 }
 
 type payloadBlob struct {
+	ID     string `json:"id"`                // for the materialize-time ACK
 	URL    string `json:"url"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
@@ -61,18 +62,21 @@ type Receiver struct {
 	hmacSecret string
 	blobsDir   string
 	mirrorDir  string
+	downloader *Downloader
 	dedup      *dedupRing
 }
 
 // NewReceiver constructs the receiver bound to a concrete store +
 // shared HMAC secret. The secret was minted at pair time and
-// copied into the vault's config.
-func NewReceiver(store *Store, hmacSecret, blobsDir, mirrorDir string) *Receiver {
+// copied into the vault's config. Pass downloader=nil to disable
+// chunked-download support (small drops still work).
+func NewReceiver(store *Store, hmacSecret, blobsDir, mirrorDir string, downloader *Downloader) *Receiver {
 	return &Receiver{
 		store:      store,
 		hmacSecret: hmacSecret,
 		blobsDir:   blobsDir,
 		mirrorDir:  mirrorDir,
+		downloader: downloader,
 		dedup:      newDedupRing(1024),
 	}
 }
@@ -101,6 +105,38 @@ func (r *Receiver) Handler() http.HandlerFunc {
 		var p payload
 		if err := json.Unmarshal(body, &p); err != nil {
 			http.Error(w, "bad json", 400)
+			return
+		}
+		// Phase 5 slice 8e.consumer: blob-backed drops go through the
+		// chunked-download path so the bytes can be Range-fetched +
+		// resumed across crashes. Same path as the SSE handler uses.
+		if p.Drop.Blob != nil {
+			if r.downloader == nil {
+				http.Error(w, "blob drop but downloader not configured", 500)
+				return
+			}
+			intent := &downloadEntry{
+				DropID:       p.Drop.ID,
+				BlobID:       p.Drop.Blob.ID,
+				DeliveryID:   delivery,
+				SignedURL:    p.Drop.Blob.URL,
+				ExpectedSHA:  p.Drop.Blob.SHA256,
+				Size:         p.Drop.Blob.Size,
+				MIME:         p.Drop.MIME,
+				Stream:       p.Stream,
+				StreamLayout: p.StreamLayout,
+				Label:        p.Drop.Label,
+				Tags:         p.Drop.Tags,
+				OriginalPath: p.Drop.OriginalPath,
+				Source:       p.Drop.Source,
+				PouchUser:    p.PouchUser,
+				CreatedAt:    p.Drop.CreatedAt,
+			}
+			if err := r.downloader.Enqueue(intent); err != nil {
+				http.Error(w, "enqueue: "+err.Error(), 500)
+				return
+			}
+			w.WriteHeader(200)
 			return
 		}
 		drop := &Drop{

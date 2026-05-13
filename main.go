@@ -403,6 +403,15 @@ func run() error {
 	// archive progress.
 	go runHeartbeats(ctx, client, store, cfg.heartbeat, cfg.paths)
 
+	// Chunked-download consumer (Phase 5 slice 8e.consumer). Shared
+	// by SSE pull mode and HTTP push mode. Runs a background loop
+	// that drains downloads.json — both blob-arrival events from
+	// fresh SSE/POST and incomplete entries from a previous run.
+	dl := NewDownloader(client, store, cfg.blobsDir, cfg.mirrorDir,
+		downloaderStatePath(), DownloadChunkSize,
+		downloadThrottleFromEnv())
+	dl.Start(ctx)
+
 	if mode == "pull" {
 		// Pull mode: no inbound /hook needed. Still useful to serve
 		// /healthz + the local UI on VAULT_LISTEN. Skip if the user
@@ -415,7 +424,7 @@ func run() error {
 		if cfg.listenAddr != "off" {
 			log.Printf("local UI: http://%s/ui", normalizeListenForURL(cfg.listenAddr))
 		}
-		runStream(ctx, client, store, cfg.hmacSecret, cfg.blobsDir, cfg.mirrorDir)
+		runStream(ctx, client, store, cfg.hmacSecret, cfg.blobsDir, cfg.mirrorDir, dl)
 		log.Printf("pouch-vault: stopped")
 		return nil
 	}
@@ -423,7 +432,7 @@ func run() error {
 	// Push mode: pouch POSTs /hook deliveries to us. Same shape as
 	// the regular webhook receiver (HMAC verify + dedup + insert).
 	// We still mount the local UI on the same listener.
-	receiver := NewReceiver(store, cfg.hmacSecret, cfg.blobsDir, cfg.mirrorDir)
+	receiver := NewReceiver(store, cfg.hmacSecret, cfg.blobsDir, cfg.mirrorDir, dl)
 	mux := http.NewServeMux()
 	mux.Handle("POST /hook", receiver.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {

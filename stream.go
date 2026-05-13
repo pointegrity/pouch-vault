@@ -20,7 +20,7 @@ import (
 // 60s. Pouch's keep-alive comments every 25s keep the connection
 // fresh through proxies; anything longer than that without traffic
 // triggers a reconnect.
-func runStream(ctx context.Context, client *PouchClient, store *Store, hmacSecret, blobsDir, mirrorDir string) {
+func runStream(ctx context.Context, client *PouchClient, store *Store, hmacSecret, blobsDir, mirrorDir string, dl *Downloader) {
 	dedup := newDedupRing(1024)
 	delay := 2 * time.Second
 	const maxDelay = 60 * time.Second
@@ -29,7 +29,7 @@ func runStream(ctx context.Context, client *PouchClient, store *Store, hmacSecre
 		if ctx.Err() != nil {
 			return
 		}
-		err := streamOnce(ctx, client, store, hmacSecret, blobsDir, mirrorDir, dedup)
+		err := streamOnce(ctx, client, store, hmacSecret, blobsDir, mirrorDir, dedup, dl)
 		if ctx.Err() != nil {
 			return
 		}
@@ -55,7 +55,7 @@ func runStream(ctx context.Context, client *PouchClient, store *Store, hmacSecre
 
 // streamOnce holds one SSE connection until it ends. Returns the
 // reason the connection ended; nil for a clean server-side close.
-func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecret, blobsDir, mirrorDir string, dedup *dedupRing) error {
+func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecret, blobsDir, mirrorDir string, dedup *dedupRing, dl *Downloader) error {
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		client.BaseURL+"/api/vaults/stream", nil)
 	if err != nil {
@@ -100,7 +100,7 @@ func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecr
 		if dedup.Seen(ev.id) {
 			continue
 		}
-		if err := handleStreamDrop(ctx, store, hmacSecret, blobsDir, mirrorDir, ev); err != nil {
+		if err := handleStreamDrop(ctx, store, hmacSecret, blobsDir, mirrorDir, ev, dl); err != nil {
 			log.Printf("stream: drop %s: %v", ev.id, err)
 			// Keep going — one bad event shouldn't sink the loop.
 		}
@@ -114,7 +114,7 @@ func streamOnce(ctx context.Context, client *PouchClient, store *Store, hmacSecr
 //
 // `body` is the raw JSON the webhook receiver would have parsed —
 // HMAC is computed over those bytes.
-func handleStreamDrop(ctx context.Context, store *Store, hmacSecret, blobsDir, mirrorDir string, ev *sseEvent) error {
+func handleStreamDrop(ctx context.Context, store *Store, hmacSecret, blobsDir, mirrorDir string, ev *sseEvent, dl *Downloader) error {
 	var wrapper struct {
 		Sig      string `json:"sig"`
 		Delivery string `json:"delivery"`
@@ -150,21 +150,36 @@ func handleStreamDrop(ctx context.Context, store *Store, hmacSecret, blobsDir, m
 		CreatedAt:    p.Drop.CreatedAt,
 		ReceivedAt:   time.Now().UTC(),
 	}
-	// Phase 2: server handed us a manifest instead of inline bytes.
-	// Fetch the blob from the signed URL, verify sha256, write to
-	// disk, mark the drop as 'blob'-encoded.
+	// Phase 5 slice 8e.consumer: a drop with Blob ref goes through
+	// the chunked-download path. The downloader records the intent,
+	// then Range-fetches over a separate single-link mutex, verifies
+	// sha256, materializes (mirror if applicable), inserts the
+	// drops row, and POSTs the materialize-time ACK. None of that
+	// happens here — we just enqueue.
 	if p.Drop.Blob != nil {
-		rel, err := fetchBlobToDisk(ctx, blobsDir,
-			p.Drop.Blob.URL, p.Drop.Blob.SHA256, p.Drop.MIME, p.Drop.Blob.Size)
-		if err != nil {
-			return fmt.Errorf("blob fetch %s: %w", drop.DropID, err)
+		if dl == nil {
+			return fmt.Errorf("blob drop %s but downloader not configured", drop.DropID)
 		}
-		drop.BodyEncoding = "blob"
-		drop.BodyBlobPath = rel
-		drop.BodySHA256 = p.Drop.Blob.SHA256
-		drop.BodySize = p.Drop.Blob.Size
-		drop.Body = ""
-	} else if err := materializeBlob(drop, blobsDir); err != nil {
+		intent := &downloadEntry{
+			DropID:       drop.DropID,
+			BlobID:       p.Drop.Blob.ID,
+			DeliveryID:   delivery,
+			SignedURL:    p.Drop.Blob.URL,
+			ExpectedSHA:  p.Drop.Blob.SHA256,
+			Size:         p.Drop.Blob.Size,
+			MIME:         p.Drop.MIME,
+			Stream:       p.Stream,
+			StreamLayout: p.StreamLayout,
+			Label:        p.Drop.Label,
+			Tags:         p.Drop.Tags,
+			OriginalPath: p.Drop.OriginalPath,
+			Source:       p.Drop.Source,
+			PouchUser:    p.PouchUser,
+			CreatedAt:    p.Drop.CreatedAt,
+		}
+		return dl.Enqueue(intent)
+	}
+	if err := materializeBlob(drop, blobsDir); err != nil {
 		// Phase 1B: inline base64 spilled to disk for non-tiny binaries.
 		log.Printf("stream: materialize %s: %v", drop.DropID, err)
 	}
