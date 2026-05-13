@@ -63,6 +63,15 @@ func runWatch(args []string) error {
 	uploader := newUploaderFromConfig(client, cfg)
 	opts := syncOpts{maxInline: defaultMaxInline, verbose: verbose, uploader: uploader}
 
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer cancel()
+	return runWatchLoop(ctx, client, watchPaths, state, opts)
+}
+
+// runWatchLoop runs the producer watch loop until ctx is cancelled.
+// Extracted from runWatch so pull-mode can run it as a goroutine
+// alongside the SSE consumer + local UI listener (Phase 5 slice 8e).
+func runWatchLoop(ctx context.Context, client *PouchClient, watchPaths []ConfigPath, state *syncState, opts syncOpts) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -120,9 +129,6 @@ func runWatch(args []string) error {
 		timers[root] = time.AfterFunc(watchDebounce, func() { fire(root, p) })
 		mu.Unlock()
 	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	defer cancel()
 
 	go func() {
 		for {

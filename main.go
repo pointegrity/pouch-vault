@@ -424,6 +424,32 @@ func run() error {
 		if cfg.listenAddr != "off" {
 			log.Printf("local UI: http://%s/ui", normalizeListenForURL(cfg.listenAddr))
 		}
+		// Inline producer loop: if VAULT_PATHS has any direction='watch'
+		// entries, run the watch loop as a goroutine alongside the SSE
+		// consumer. One daemon serves both roles — keeps launchd/systemd
+		// unit count to one and the local UI on the same port.
+		// Phase 5 slice 8e (post-launchd).
+		var watchPaths []ConfigPath
+		for _, p := range cfg.paths {
+			if p.effectiveDirection() == "watch" {
+				watchPaths = append(watchPaths, p)
+			}
+		}
+		if len(watchPaths) > 0 {
+			st, err := loadSyncState()
+			if err != nil {
+				log.Printf("pull-mode watch: state load: %v — starting fresh", err)
+				st = &syncState{Paths: map[string]*syncStatePath{}}
+			}
+			uploader := newUploaderFromConfig(client, cfg)
+			opts := syncOpts{maxInline: defaultMaxInline, uploader: uploader}
+			go func() {
+				if err := runWatchLoop(ctx, client, watchPaths, st, opts); err != nil {
+					log.Printf("pull-mode watch: %v", err)
+				}
+			}()
+			log.Printf("watch loop: monitoring %d path(s) in pull-mode process", len(watchPaths))
+		}
 		runStream(ctx, client, store, cfg.hmacSecret, cfg.blobsDir, cfg.mirrorDir, dl)
 		log.Printf("pouch-vault: stopped")
 		return nil

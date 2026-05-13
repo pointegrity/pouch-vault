@@ -95,7 +95,10 @@ local-install: build  ## Install + load the launchd agent (first-time setup)
 	     -e 's|__LOGERR__|$(LOCAL_LOGERR)|g' \
 	     -e 's|__WORKDIR__|$(LOCAL_PREFIX)|g' \
 	     deploy/com.pointegrity.pouch-vault.plist > "$(LOCAL_PLIST)"
-	@launchctl bootout gui/$$(id -u)/$(LOCAL_LABEL) 2>/dev/null || true
+	@if launchctl print gui/$$(id -u)/$(LOCAL_LABEL) >/dev/null 2>&1; then \
+		launchctl bootout gui/$$(id -u)/$(LOCAL_LABEL) 2>/dev/null || true; \
+		sleep 1; \
+	fi
 	@launchctl bootstrap gui/$$(id -u) "$(LOCAL_PLIST)"
 	@echo ">> Installed. 'make local-status' to verify."
 
