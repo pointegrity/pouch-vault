@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  pouch-vault launchd agent (macOS).
+  Template; placeholders __BINARY__, __CONFIG__, __LOGOUT__,
+  __LOGERR__, __WORKDIR__ are filled by `make local-install` from
+  the Makefile.
+
+  Lives at ~/Library/LaunchAgents/com.pointegrity.pouch-vault.plist
+  once installed. RunAtLoad+KeepAlive give it systemd-like
+  auto-restart-on-crash + start-at-login behavior.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pointegrity.pouch-vault</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__BINARY__</string>
+        <string>watch</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>POUCH_VAULT_CONFIG</key>
+        <string>__CONFIG__</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__LOGOUT__</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOGERR__</string>
+
+    <key>WorkingDirectory</key>
+    <string>__WORKDIR__</string>
+
+    <!-- Throttle restart loops when the daemon fails fast (e.g.
+         missing creds). 10s is enough to avoid log spam without
+         delaying recovery for transient network blips. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
