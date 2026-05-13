@@ -1,0 +1,45 @@
+# /etc/systemd/system/pouch-vault.service
+#
+# Runs pouch-vault as a long-living pull-mode daemon. Mirrors the
+# mytraces / pouch deploy pattern: binary at $WS/pouch-vault/build/
+# pouch-vault, env from /etc/default/pouch-vault (mode 0600 — holds
+# vault key + hmac secret), data under ~/infra/pouch-vault/data.
+#
+# Install once (rtx, as user jy with sudo):
+#   sudo cp deploy/pouch-vault.service /etc/systemd/system/
+#   sudo install -d -o jy -g jy /home/jy/infra/pouch-vault/data
+#   sudo install -m 0600 -o root -g jy deploy/pouch-vault.env.example /etc/default/pouch-vault
+#   $EDITOR /etc/default/pouch-vault   # fill in POUCH_VAULT_KEY / POUCH_HMAC_SECRET
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pouch-vault
+
+[Unit]
+Description=pouch-vault — local replica of pouch streams
+Documentation=https://github.com/pointegrity/pouch-vault
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jy
+Group=jy
+WorkingDirectory=/home/jy/infra/pouch-vault/pouch-vault
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=/etc/default/pouch-vault
+ExecStart=/home/jy/infra/pouch-vault/pouch-vault/build/pouch-vault
+Restart=on-failure
+RestartSec=5
+# Bounded log volume: a chatty download / sync run can spew a lot.
+StandardOutput=journal
+StandardError=journal
+
+# Filesystem confinement: vault only needs to write its data dir.
+# blobs/, mirror/, drops.db all live under data/.
+ProtectSystem=strict
+ReadWritePaths=/home/jy/infra/pouch-vault/data
+ReadWritePaths=/home/jy/.local/state/pouch-vault
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
