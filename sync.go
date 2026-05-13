@@ -33,8 +33,9 @@ import (
 // syncPath with these knobs.
 type syncOpts struct {
 	dry         bool   // log what would happen; skip POSTs + state write
-	maxInline   int64  // bytes; files above this skip with a warning
+	maxInline   int64  // bytes; files above this use chunked upload
 	verbose     bool
+	uploader    *Uploader // chunked uploader for files > maxInline
 }
 
 const defaultMaxInline = 1 << 20 // 1 MiB — matches existing /api/items cap
@@ -65,7 +66,8 @@ func runSync(args []string) error {
 	}
 
 	client := NewPouchClient(cfg.pouchURL, cfg.vaultKey)
-	opts := syncOpts{dry: dry, maxInline: defaultMaxInline, verbose: verbose}
+	uploader := newUploaderFromConfig(client, cfg)
+	opts := syncOpts{dry: dry, maxInline: defaultMaxInline, verbose: verbose, uploader: uploader}
 
 	totalDropped, totalSkipped, totalErrors := 0, 0, 0
 	for _, p := range cfg.paths {
@@ -163,12 +165,6 @@ func syncFile(ctx context.Context, client *PouchClient, state *syncState, p Conf
 	if err != nil {
 		return 0, err
 	}
-	if info.Size() > opts.maxInline {
-		// Future: chunk via /api/blobs/manifest. For v0 just skip with a warning.
-		log.Printf("sync: skip %s — %d bytes exceeds max-inline %d", rel, info.Size(), opts.maxInline)
-		return 0, nil
-	}
-
 	// Quick-skip via mtime match — saves the sha256 cost when the
 	// file genuinely hasn't changed.
 	prev := state.get(p.Path, rel)
@@ -177,6 +173,14 @@ func syncFile(ctx context.Context, client *PouchClient, state *syncState, p Conf
 			log.Printf("sync: skip %s — mtime+size unchanged", rel)
 		}
 		return 0, nil
+	}
+
+	// Two paths from here:
+	//   - small  (size <= maxInline): read fully, base64/utf8, inline POST
+	//   - large  (size  > maxInline): chunked-upload via Uploader, POST
+	//                                 /api/items with body_blob_id
+	if info.Size() > opts.maxInline {
+		return syncFileLarge(ctx, client, state, p, rel, abs, info, opts)
 	}
 
 	body, err := os.ReadFile(abs)
@@ -224,6 +228,68 @@ func syncFile(ctx context.Context, client *PouchClient, state *syncState, p Conf
 		Stream: p.Stream,
 	})
 	log.Printf("sync: dropped %s -> %s (%d bytes)", rel, out.ID, info.Size())
+	return 1, nil
+}
+
+// syncFileLarge handles files over the inline cap via the chunked
+// upload protocol (Phase 5 slice 8e.producer). Steps:
+//   1. Compute sha256 streaming (don't read the whole file into RAM).
+//   2. Skip if the sync state already has the file at this sha.
+//   3. Hand to the uploader; it resumes-or-opens, chunks, completes.
+//   4. POST /api/items with body_blob_id.
+//   5. Record sync state with the returned drop_id.
+func syncFileLarge(ctx context.Context, client *PouchClient, state *syncState, p ConfigPath, rel, abs string, info os.FileInfo, opts syncOpts) (int, error) {
+	if opts.uploader == nil {
+		log.Printf("sync: skip %s — %d bytes exceeds inline cap and no uploader configured", rel, info.Size())
+		return 0, nil
+	}
+	shaHex, err := FileSHA(abs)
+	if err != nil {
+		return 0, fmt.Errorf("sha256: %w", err)
+	}
+	prev := state.get(p.Path, rel)
+	if prev != nil && prev.SHA256 == shaHex {
+		prev.MTime = info.ModTime()
+		state.set(p.Path, rel, prev)
+		if opts.verbose {
+			log.Printf("sync: skip %s — large file content unchanged", rel)
+		}
+		return 0, nil
+	}
+	if opts.dry {
+		log.Printf("sync: would chunk-upload %s -> stream %s (%d bytes, sha=%s)", rel, p.Stream, info.Size(), shaHex[:8])
+		return 1, nil
+	}
+
+	mime := mimeFromExt(filepath.Ext(rel))
+	log.Printf("sync: chunk-uploading %s (%d bytes, sha=%s)", rel, info.Size(), shaHex[:8])
+	blobID, err := opts.uploader.UploadFile(ctx, abs, mime, shaHex, info.Size())
+	if err != nil {
+		return 0, fmt.Errorf("chunked upload: %w", err)
+	}
+
+	postCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := client.PostDrop(postCtx, DropInput{
+		Label:        filepath.Base(rel),
+		BodyBlobID:   blobID,
+		BodyEncoding: "blob",
+		MIME:         mime,
+		Stream:       p.Stream,
+		OriginalPath: rel,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("post drop: %w", err)
+	}
+	state.set(p.Path, rel, &syncStateFile{
+		SHA256: shaHex,
+		Size:   info.Size(),
+		MTime:  info.ModTime(),
+		DropID: out.ID,
+		Stream: p.Stream,
+	})
+	log.Printf("sync: chunk-uploaded %s -> %s (blob %s, %d bytes)",
+		rel, out.ID, blobID, info.Size())
 	return 1, nil
 }
 

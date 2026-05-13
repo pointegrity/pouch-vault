@@ -156,8 +156,9 @@ func (c *PouchClient) Pair(ctx context.Context, in PairInput) (*PairResult, erro
 // as auth and stamps source as "vault:<id>".
 type DropInput struct {
 	Label        string   `json:"label"`
-	Body         string   `json:"body"`
+	Body         string   `json:"body,omitempty"`
 	BodyEncoding string   `json:"body_encoding,omitempty"`
+	BodyBlobID   string   `json:"body_blob_id,omitempty"` // set instead of Body for big drops (Phase 5 slice 8e)
 	MIME         string   `json:"mime,omitempty"`
 	Stream       string   `json:"stream,omitempty"`
 	Tags         []string `json:"tags,omitempty"`
@@ -182,6 +183,159 @@ func (c *PouchClient) PostDrop(ctx context.Context, in DropInput) (*DropResult, 
 	}
 	return &out, nil
 }
+
+// --- Chunked-upload protocol client (Phase 5 slice 8e.producer) ---
+
+// BlobOpenResult is what POST /api/blobs/open returns.
+type BlobOpenResult struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+// BlobStatusResult is what GET /api/blobs/{id}/status returns.
+type BlobStatusResult struct {
+	ID              string `json:"id"`
+	Status          string `json:"status"` // open|ready|cancelled|relayed|relayed-expired
+	ReceivedThrough int64  `json:"received_through"`
+	SHA256          string `json:"sha256,omitempty"`
+}
+
+// BlobPatchResult is what PATCH /api/blobs/{id} returns.
+type BlobPatchResult struct {
+	ReceivedThrough int64 `json:"received_through"`
+}
+
+// OpenBlob mints a fresh chunked-upload blob id. Optional mime hint
+// is recorded for future content-type negotiation.
+func (c *PouchClient) OpenBlob(ctx context.Context, mime string) (*BlobOpenResult, error) {
+	var out BlobOpenResult
+	if err := c.post(ctx, "/api/blobs/open", map[string]any{"mime": mime}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PatchBlob appends bytes via Content-Range: bytes startOff-endOff/total.
+// Caller passes total = -1 to send "*". Cloud is sequential-append only;
+// caller is responsible for sending offsets in order.
+func (c *PouchClient) PatchBlob(ctx context.Context, blobID string, startOff, endOff, total int64, chunk []byte) (*BlobPatchResult, error) {
+	rng := fmt.Sprintf("bytes %d-%d/%s", startOff, endOff,
+		func() string {
+			if total < 0 {
+				return "*"
+			}
+			return fmt.Sprintf("%d", total)
+		}())
+	req, err := http.NewRequestWithContext(ctx, "PATCH",
+		c.BaseURL+"/api/blobs/"+blobID, bytes.NewReader(chunk))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Range", rng)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Vault-Key", c.APIKey)
+	req.Header.Set("User-Agent", c.UserAgent)
+	cli := c.HTTPClient
+	if cli == nil {
+		cli = http.DefaultClient
+	}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 429 {
+		return nil, ErrCloudCapExceeded
+	}
+	if resp.StatusCode >= 300 {
+		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("PATCH /api/blobs/%s: %d %s", blobID, resp.StatusCode, strings.TrimSpace(string(buf)))
+	}
+	var out BlobPatchResult
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CompleteBlob finalizes the upload. Cloud verifies sha256+size
+// against the on-disk partial, renames into the canonical
+// content-addressed slot, flips status to ready.
+func (c *PouchClient) CompleteBlob(ctx context.Context, blobID, sha256Hex string, size int64) error {
+	return c.post(ctx, "/api/blobs/"+blobID+"/complete", map[string]any{
+		"sha256": sha256Hex,
+		"size":   size,
+	}, nil)
+}
+
+// GetBlobStatus returns the producer-side resume info — where the
+// cloud thinks it left off receiving bytes for this blob.
+func (c *PouchClient) GetBlobStatus(ctx context.Context, blobID string) (*BlobStatusResult, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		c.BaseURL+"/api/blobs/"+blobID+"/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Vault-Key", c.APIKey)
+	req.Header.Set("User-Agent", c.UserAgent)
+	cli := c.HTTPClient
+	if cli == nil {
+		cli = http.DefaultClient
+	}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil, ErrBlobNotFound
+	}
+	if resp.StatusCode >= 300 {
+		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("GET /api/blobs/%s/status: %d %s", blobID, resp.StatusCode, strings.TrimSpace(string(buf)))
+	}
+	var out BlobStatusResult
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CancelBlob deletes an open chunked-upload blob. Idempotent in spirit
+// — cloud returns 409 if the blob isn't open anymore (already ready
+// or cancelled), which the caller can treat as "no work needed."
+func (c *PouchClient) CancelBlob(ctx context.Context, blobID string) error {
+	req, err := http.NewRequestWithContext(ctx, "DELETE",
+		c.BaseURL+"/api/blobs/"+blobID, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Vault-Key", c.APIKey)
+	req.Header.Set("User-Agent", c.UserAgent)
+	cli := c.HTTPClient
+	if cli == nil {
+		cli = http.DefaultClient
+	}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 204 || resp.StatusCode == 409 {
+		return nil
+	}
+	buf, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	return fmt.Errorf("DELETE /api/blobs/%s: %d %s", blobID, resp.StatusCode, strings.TrimSpace(string(buf)))
+}
+
+// ErrCloudCapExceeded is returned from PatchBlob when the cloud's
+// per-user open-bytes cap is at limit. Callers back off and retry.
+var ErrCloudCapExceeded = fmt.Errorf("cloud open-transfer cap exceeded")
+
+// ErrBlobNotFound is returned from GetBlobStatus when the blob id no
+// longer resolves — either it was never minted, or the cloud reaped
+// a stale-open or cancelled partial. Caller starts a fresh transfer.
+var ErrBlobNotFound = fmt.Errorf("blob not found on cloud")
 
 // post is the shared codepath. Marshal, set headers, send, decode
 // (when out != nil), surface non-2xx as an error.

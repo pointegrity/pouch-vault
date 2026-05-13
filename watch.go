@@ -60,7 +60,8 @@ func runWatch(args []string) error {
 		return err
 	}
 	client := NewPouchClient(cfg.pouchURL, cfg.vaultKey)
-	opts := syncOpts{maxInline: defaultMaxInline, verbose: verbose}
+	uploader := newUploaderFromConfig(client, cfg)
+	opts := syncOpts{maxInline: defaultMaxInline, verbose: verbose, uploader: uploader}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
