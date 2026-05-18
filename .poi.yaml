@@ -1,0 +1,7 @@
+schema_version: 2
+module:
+    name: pouch-vault
+    path: ""
+    description: Local relay daemon for pouch — receives every drop from the user's cloud pouch over a single outbound HTTPS connection and mirrors it to a local SQLite archive. Statically linked Go, no CGO, cross-built for Linux/macOS/Windows. Ships alongside a minimal `pouch` client CLI in the same repo.
+    status: active
+type: app
