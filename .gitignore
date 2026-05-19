@@ -1,5 +1,9 @@
 # Build output
 /build/
+/pouch-vault
+/pouch-vault.exe
+/pouch
+/pouch.exe
 /pouch-anchor
 /pouch-anchor.exe
 *.test
