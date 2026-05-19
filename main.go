@@ -73,10 +73,16 @@ type config struct {
 //                        `pouch-vault sync` / `watch` subcommands.
 // Per decision vault-producer-mode-and-local-only-git.
 type ConfigPath struct {
-	Path      string `json:"path"`
-	Stream    string `json:"stream"`
-	Label     string `json:"label,omitempty"`
-	Direction string `json:"direction,omitempty"`
+	Path      string          `json:"path"`
+	Stream    string          `json:"stream"`
+	Label     string          `json:"label,omitempty"`
+	Direction string          `json:"direction,omitempty"`
+	// Snapshot is the optional periodic-snapshot config (slice 8f).
+	// When present, this path is schedule-driven: a per-path
+	// goroutine ticks at the configured interval and runs the kind-
+	// specific producer. `Direction` is ignored for snapshot paths
+	// (they're producers via a different mechanism than watch).
+	Snapshot *SnapshotConfig `json:"snapshot,omitempty"`
 }
 
 // effectiveDirection returns the direction with the default applied.
@@ -275,6 +281,11 @@ func main() {
 				log.Fatalf("pouch-vault get: %v", err)
 			}
 			return
+		case "snapshot":
+			if err := runSnapshotCommand(os.Args[2:]); err != nil {
+				log.Fatalf("pouch-vault snapshot: %v", err)
+			}
+			return
 		case "version", "--version", "-v":
 			fmt.Printf("pouch-vault %s\n", Version)
 			return
@@ -303,6 +314,10 @@ Usage:
                                 producer. Coalesces rapid-fire events with
                                 a 500ms debounce; falls back to a 30s
                                 safety scan.
+  pouch-vault snapshot <stream> manual one-shot snapshot of the VAULT_PATHS
+                                entry bound to <stream> (kind=sqlite uses
+                                the online .backup API). Useful for testing
+                                without waiting for the scheduled tick.
   pouch-vault init [--force]    scaffold OS-conventional config + data dirs
   pouch-vault version           print version and exit
   pouch-vault help              print this help
@@ -449,6 +464,22 @@ func run() error {
 				}
 			}()
 			log.Printf("watch loop: monitoring %d path(s) in pull-mode process", len(watchPaths))
+		}
+		// Snapshot loops — Phase 5 slice 8f. One goroutine per
+		// VAULT_PATHS entry with a `snapshot` block. Independent of
+		// the watch loop above; snapshot paths bypass fsnotify and
+		// fire on schedule.
+		var snapPaths []ConfigPath
+		for _, p := range cfg.paths {
+			if p.Snapshot != nil {
+				snapPaths = append(snapPaths, p)
+			}
+		}
+		if len(snapPaths) > 0 {
+			uploader := newUploaderFromConfig(client, cfg)
+			opts := syncOpts{maxInline: defaultMaxInline, uploader: uploader}
+			startSnapshotLoops(ctx, client, cfg, opts)
+			log.Printf("snapshot loops: %d path(s) scheduled", len(snapPaths))
 		}
 		runStream(ctx, client, store, cfg.hmacSecret, cfg.blobsDir, cfg.mirrorDir, dl)
 		log.Printf("pouch-vault: stopped")
